@@ -1,0 +1,47 @@
+# ============================================================
+# URLLM 增强推荐 Pipeline 全局配置
+# ============================================================
+
+# 数据集路径 (预处理阶段使用)
+data:
+  # 原始交互数据 (Amazon JSON Lines 格式)
+  # 请将下载的 Amazon Entertainment-Education 数据放入 data/raw/ 目录
+  review_x_path: "data/raw/Entertainment_reviews.json"
+  review_y_path: "data/raw/Education_reviews.json"
+  # 物品元数据 (可选, 提高属性提取质量)
+  meta_x_path: "data/raw/Entertainment_meta.json"
+  meta_y_path: "data/raw/Education_meta.json"
+
+# 域定义
+domains:
+  x: "Entertainment"
+  y: "Education"
+
+# 预处理配置
+preprocess:
+  min_interactions: 3          # 最少交互次数过滤
+  max_seq_len: 15              # 最大序列长度 (与 DG 模型一致)
+  random_seed: 2040            # 随机种子 (与 DG 模型一致)
+  domain_x_name: "Entertainment"
+  domain_y_name: "Education"
+
+# 物品属性提取配置
+attribute_extraction:
+  # 方法: "api" (调用LLM API), "local" (本地模型), "convert" (从已有item_prompt转换)
+  backend: "convert"
+  # --- API 模式 ---
+  api_key: "your-api-key-here"
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-3.5-turbo-0613"
+  # --- 本地模式 ---
+  model_name: "meta-llama/Llama-2-7b-chat-hf"
+  device: "cuda"
+  # --- 转换模式 (使用已生成的DeepSeek V4结果) ---
+  item_prompt_dataset: "GM"    # "GM" (Game-Movie) 或 "AO" (Art-Office)
+  # 通用
+  language: "en"               # "en" 或 "zh"
+
+# Instruction 数据构建配置
+instruction:
+  template_type: "profile"     # "base" | "profile" | "cot"
+  output_format: "alpaca"      # "alpaca" | "chatml"

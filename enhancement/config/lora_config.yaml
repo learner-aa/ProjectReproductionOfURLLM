@@ -1,0 +1,51 @@
+# ============================================================
+# LoRA 微调配置
+# ============================================================
+
+# 基座模型
+model:
+  base_model: "/root/autodl-tmp/models/models/Qwen--Qwen2-1.5B-Instruct/snapshots/master"
+  lora_r: 8                                      # LoRA rank
+  lora_alpha: 16                                 # LoRA alpha (通常 2x rank)
+  lora_dropout: 0.05
+  lora_target_modules:                           # 应用 LoRA 的模块 (原始论文7个)
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+# 训练参数
+training:
+  num_epochs: 5                                  # 扩 modules+epochs: 5 epochs (~19735步)
+  max_steps: -1                                  # -1 = 取消步数限制,按 num_epochs 完整训练
+  batch_size: 1                                  # per-device batch size (OOM 降至1, vocab大)
+  gradient_accumulation_steps: 8                 # effective batch = 1*8 = 8
+  learning_rate: 1.0e-4
+  warmup_ratio: 0.03
+  max_seq_length: 1024                           # 最大序列长度
+  weight_decay: 0.01
+  fp16: true                                     # 使用 FP16 混合精度
+  bf16: false                                    # A100 可设为 true
+  logging_steps: 50
+  save_steps: 200
+  eval_steps: 200
+  save_total_limit: 3                            # 最多保留 3 个 checkpoint
+
+# 数据路径
+data:
+  train_file: "train_instructions.json"
+  valid_file: "valid_instructions.json"
+
+# 推理配置
+inference:
+  batch_size: 8                                  # 推理 batch size
+  temperature: 0.1                               # 低温度 → 更确定的生成
+  max_new_tokens: 128                            # 完整生成 (原64加速跑通,现恢复128)
+
+# 输出
+output:
+  save_dir: "outputs/lora_weights"
+  log_dir: "outputs/logs"

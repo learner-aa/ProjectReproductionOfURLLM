@@ -1,0 +1,54 @@
+# ============================================================
+# 服务器环境说明
+# ============================================================
+
+# 硬件要求
+hardware:
+  gpu:
+    minimum: "1x NVIDIA A100 40GB"
+    recommended: "2-4x NVIDIA A100 40GB"
+    notes: "LoRA 微调 7B 模型需要约 16GB 显存; 推理可量化到 8GB"
+  memory:
+    minimum: "32 GB"
+    recommended: "64 GB"
+  disk:
+    minimum: "100 GB"
+    recommended: "200 GB"
+
+# 软件要求
+software:
+  os: "Ubuntu 20.04+ / CentOS 7+"
+  cuda: "11.8+ (推荐 12.1+)"
+  python: "3.9 - 3.11"
+  pytorch: "2.0+ (需匹配 CUDA 版本)"
+
+# 环境安装命令 (按顺序执行)
+setup_commands:
+  - "conda create -n urllm python=3.10 -y"
+  - "conda activate urllm"
+  - "pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121"
+  - "pip install -r requirements.txt"
+
+# 模型下载 (需提前执行)
+model_download:
+  notes: "基座模型需提前下载到本地或通过 HuggingFace 缓存"
+  commands:
+    - "huggingface-cli download meta-llama/Llama-2-7b-chat-hf --local-dir ./models/Llama-2-7b-chat-hf"
+    - "# 或使用 Qwen: huggingface-cli download Qwen/Qwen2-7B-Instruct --local-dir ./models/Qwen2-7B-Instruct"
+
+# 上传到服务器的文件清单
+upload_files:
+  required:
+    - "src/"
+    - "config/"
+    - "scripts/"
+    - "saved_models/"
+    - "best_trte_XORY_DG_.npy"
+    - "t4_G2_final_DGresult_test_candidate.npy"
+    - "requirements.txt"
+    - "README.md"
+    - "struct.md"
+  not_required:
+    - "data/"           # 在服务器上生成或放置
+    - "outputs/"        # 运行时生成
+    - "2406.03085v1.pdf"

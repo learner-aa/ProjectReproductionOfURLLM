@@ -1,0 +1,21 @@
+{
+  "train": {
+    "num_users": 35941,
+    "source_domain_dim": 656,
+    "target_domain_dim": 656,
+    "source_mean": 0.002129268366843462,
+    "source_std": 0.8932339549064636,
+    "target_mean": 0.002573374193161726,
+    "target_std": 0.9978492856025696
+  },
+  "test": {
+    "num_users": 3601,
+    "source_domain_dim": 656,
+    "target_domain_dim": 656,
+    "source_mean": 0.002144310623407364,
+    "source_std": 0.8796653747558594,
+    "target_mean": 0.002749454928562045,
+    "target_std": 1.0248003005981445
+  },
+  "description": "\u53cc\u56fe\u6a21\u578b\u751f\u6210\u7684\u7528\u6237\u7279\u5f81\u7edf\u8ba1"
+}

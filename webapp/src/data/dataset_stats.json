@@ -1,0 +1,17 @@
+{
+  "movie_game": {
+    "name": "Entertainment-Education (Movie-Game)",
+    "source_domain": {
+      "name": "Entertainment",
+      "num_items": 57088,
+      "num_interactions": 365293
+    },
+    "target_domain": {
+      "name": "Education",
+      "num_items": 107792,
+      "num_interactions": 329066
+    },
+    "num_users": 40479,
+    "avg_sequence_length": 17.2
+  }
+}
