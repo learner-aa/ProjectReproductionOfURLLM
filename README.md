@@ -53,7 +53,7 @@ cd URLLM-project
 
 **方式 A:从 GitHub clone(推荐)**
 ```bash
-git clone https://github.com/你的用户名/URLLM-project.git
+git clone https://github.com/learner-aa/ProjectReproductionOfURLLM.git
 cd URLLM-project
 ```
 
@@ -74,13 +74,29 @@ modelscope download --model AI-ModelScope/Llama-2-7b-hf --local_dir models/Llama
 ```
 > 若可访问 HuggingFace,也可用 `huggingface-cli download meta-llama/Llama-2-7b-hf --local-dir models/Llama-2-7b-hf`
 
-**(b) LoRA 微调权重(153M)**
+**(b) LoRA 微调权重(142M)**
 
-从 GitHub Release 下载 `lora-weights.zip`,解压到对应目录:
+从 GitHub Release 下载 `lora-weights.zip`:
 ```bash
+# 方式 1:浏览器下载
+# https://github.com/learner-aa/ProjectReproductionOfURLLM/releases/download/v1.0.0/lora-weights.zip
+
+# 方式 2:命令行下载
+wget https://github.com/learner-aa/ProjectReproductionOfURLLM/releases/download/v1.0.0/lora-weights.zip
+
+# 解压到对应目录
 unzip lora-weights.zip -d enhancement/outputs/lora_weights/llama2_final/
 ```
 > 含 `adapter_model.safetensors` + `adapter_config.json`,推理必需。
+
+**(c) DG 基线数据(691M,可选)**
+
+若需对比 DG 基线,从 GitHub Release 下载 `dg-npy.zip`:
+```bash
+wget https://github.com/learner-aa/ProjectReproductionOfURLLM/releases/download/v1.0.0/dg-npy.zip
+unzip dg-npy.zip -d DG_Final/
+```
+> 含 DG 基线模型评分矩阵(.npy),仅评估对比时需要。
 
 ### 3. 配置 Python 环境
 
