@@ -22,19 +22,39 @@ logger = logging.getLogger(__name__)
 # ============================================================
 PROJECT_ROOT = Path(__file__).resolve().parent.parent  # enhancement/
 
-# DG 模型产物 (跨域推荐搭建结果)
-DG_RESULTS_DIR = PROJECT_ROOT.parent / "DG_Final" / "GM" / "DG"
-DG_SAVER_DIR = PROJECT_ROOT.parent / "DG_Final" / "GM" / "saver"
+# DG 模型产物 (跨域推荐搭建结果) - 多数据集配置
+_DG_FINAL_DIR = PROJECT_ROOT.parent / "DG_Final"
+DG_FILE_CONFIG: Dict[str, Dict] = {
+    "GM": {
+        "results_dir": _DG_FINAL_DIR / "GM" / "DG",
+        "saver_dir": _DG_FINAL_DIR / "GM" / "saver",
+        "scores_file": "best_trte_XORY_DG_.npy",
+        "candidates_file": "t4_G2_final_DGresult_test_candidate.npy",
+        "feature_prefix": "DGGM",
+    },
+    "AO": {
+        "results_dir": _DG_FINAL_DIR / "AO" / "DG",
+        "saver_dir": _DG_FINAL_DIR / "AO" / "saver",
+        "scores_file": "best_trte_XORY_DG_390_.npy",
+        "candidates_file": "t4_G2_final_DGresult_test_candidate_AO.npy",
+        "feature_prefix": "DGAO",
+    },
+}
+
+# 兼容旧引用 (默认 GM)
+DG_RESULTS_DIR = DG_FILE_CONFIG["GM"]["results_dir"]
+DG_SAVER_DIR = DG_FILE_CONFIG["GM"]["saver_dir"]
+SAVED_MODELS_DIR = DG_RESULTS_DIR
 
 # item_prompt 数据 (DeepSeek V4 结果)
-ITEM_PROMPT_GM_DIR = (PROJECT_ROOT.parent / "DG_Final" / "DG_src"
+ITEM_PROMPT_GM_DIR = (_DG_FINAL_DIR / "DG_src"
                       / "dataset" / "Entertainment-Education_Amazon" / "item_prompt_GM")
-ITEM_PROMPT_AO_DIR = (PROJECT_ROOT.parent / "DG_Final" / "DG_src"
+ITEM_PROMPT_AO_DIR = (_DG_FINAL_DIR / "DG_src"
                       / "dataset" / "Entertainment-Education_AO" / "item_prompt_AO")
 
 # 物品列表 CSV + 训练数据
-DG_GM_DIR = PROJECT_ROOT.parent / "DG_Final" / "GM"
-DG_AO_DIR = PROJECT_ROOT.parent / "DG_Final" / "AO"
+DG_GM_DIR = _DG_FINAL_DIR / "GM"
+DG_AO_DIR = _DG_FINAL_DIR / "AO"
 
 # 增强 Pipeline 自身数据路径
 DATA_DIR = PROJECT_ROOT / "data"
@@ -42,8 +62,21 @@ PROCESSED_DIR = DATA_DIR / "processed"
 RAW_DIR = DATA_DIR / "raw"
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 
-# 兼容旧引用
-SAVED_MODELS_DIR = DG_RESULTS_DIR
+
+def get_dataset_suffix(dataset: str = "GM") -> str:
+    """返回数据集文件名后缀: GM -> '', AO -> '_AO'"""
+    ds = dataset.upper()
+    return "" if ds == "GM" else f"_{ds}"
+
+
+def get_processed_path(filename: str, dataset: str = "GM") -> Path:
+    """根据数据集返回 processed 目录下的文件路径。
+    GM: interactions.json; AO: interactions_AO.json
+    """
+    suffix = get_dataset_suffix(dataset)
+    stem = filename.rsplit(".", 1)[0]
+    ext = filename.rsplit(".", 1)[1] if "." in filename else "json"
+    return PROCESSED_DIR / f"{stem}{suffix}.{ext}"
 
 
 def ensure_dirs():
@@ -59,9 +92,12 @@ def ensure_dirs():
 # DG 模型特征加载
 # ============================================================
 
-def load_dg_features() -> Dict[str, np.ndarray]:
+def load_dg_features(dataset: str = "GM") -> Dict[str, np.ndarray]:
     """
     加载 DG 双图模型产出的特征文件。
+
+    Args:
+        dataset: "GM" 或 "AO"
 
     Returns:
         dict with keys:
@@ -70,11 +106,14 @@ def load_dg_features() -> Dict[str, np.ndarray]:
             - test_x_fea:  (num_test_users, 656) X域用户特征
             - test_y_fea:  (num_test_users, 656) Y域用户特征
     """
+    cfg = DG_FILE_CONFIG[dataset.upper()]
+    prefix = cfg["feature_prefix"]
+    results_dir = cfg["results_dir"]
     files = {
-        "train_x_fea": SAVED_MODELS_DIR / "DGGM_final_train_x_fea.npy",
-        "train_y_fea": SAVED_MODELS_DIR / "DGGM_final_train_y_fea.npy",
-        "test_x_fea": SAVED_MODELS_DIR / "DGGM_final_test_x_fea.npy",
-        "test_y_fea": SAVED_MODELS_DIR / "DGGM_final_test_y_fea.npy",
+        "train_x_fea": results_dir / f"{prefix}_final_train_x_fea.npy",
+        "train_y_fea": results_dir / f"{prefix}_final_train_y_fea.npy",
+        "test_x_fea": results_dir / f"{prefix}_final_test_x_fea.npy",
+        "test_y_fea": results_dir / f"{prefix}_final_test_y_fea.npy",
     }
     features = {}
     for key, path in files.items():
@@ -85,34 +124,37 @@ def load_dg_features() -> Dict[str, np.ndarray]:
     return features
 
 
-def load_dg_scores() -> np.ndarray:
+def load_dg_scores(dataset: str = "GM") -> np.ndarray:
     """加载 DG 模型测试评分矩阵 (num_test_users, num_items)"""
-    path = DG_SAVER_DIR / "best_trte_XORY_DG_.npy"
+    cfg = DG_FILE_CONFIG[dataset.upper()]
+    path = cfg["saver_dir"] / cfg["scores_file"]
     if not path.exists():
         raise FileNotFoundError(f"评分矩阵不存在: {path}")
     scores = np.load(str(path))
-    logger.info(f"已加载评分矩阵: shape={scores.shape}")
+    logger.info(f"已加载评分矩阵({dataset}): shape={scores.shape}")
     return scores
 
 
-def load_dg_candidates() -> np.ndarray:
+def load_dg_candidates(dataset: str = "GM") -> np.ndarray:
     """加载 DG 模型候选物品矩阵 (num_test_users, 10000)"""
-    path = DG_RESULTS_DIR / "t4_G2_final_DGresult_test_candidate.npy"
+    cfg = DG_FILE_CONFIG[dataset.upper()]
+    path = cfg["results_dir"] / cfg["candidates_file"]
     if not path.exists():
         raise FileNotFoundError(f"候选矩阵不存在: {path}")
     candidates = np.load(str(path))
-    logger.info(f"已加载候选矩阵: shape={candidates.shape}")
+    logger.info(f"已加载候选矩阵({dataset}): shape={candidates.shape}")
     return candidates
 
 
-def load_dg_config() -> Dict[str, Any]:
+def load_dg_config(dataset: str = "GM") -> Dict[str, Any]:
     """加载 DG 模型训练配置"""
-    path = SAVED_MODELS_DIR / "config.json"
+    cfg = DG_FILE_CONFIG[dataset.upper()]
+    path = cfg["results_dir"] / "config.json"
     if not path.exists():
         raise FileNotFoundError(f"配置文件不存在: {path}")
     with open(path, "r", encoding="utf-8") as f:
         config = json.load(f)
-    logger.info(f"已加载 DG 配置: model={config.get('model')}, hidden={config.get('hidden_units')}")
+    logger.info(f"已加载 DG 配置({dataset}): model={config.get('model')}, hidden={config.get('hidden_units')}")
     return config
 
 
@@ -144,53 +186,62 @@ def save_json(data: Any, path: Union[str, Path], indent: int = 2):
 # 交互序列处理
 # ============================================================
 
-def load_interactions(path: Optional[Union[str, Path]] = None) -> Dict[str, List[str]]:
+def load_interactions(path: Optional[Union[str, Path]] = None, dataset: str = "GM") -> Dict[str, List[str]]:
     """
     加载用户交互序列。
 
     Args:
         path: JSON 文件路径, 格式 {"user_id": ["item_id_1", "item_id_2", ...]}
-              若为 None 则使用默认路径
+              若为 None 则根据 dataset 使用默认路径
+        dataset: "GM" 或 "AO"
 
     Returns:
         dict: {user_id: [item_id, ...]}
     """
     if path is None:
-        path = PROCESSED_DIR / "interactions.json"
+        path = get_processed_path("interactions.json", dataset)
     return load_json(path)
 
 
-def load_item_metadata(path: Optional[Union[str, Path]] = None) -> Dict[str, Dict]:
+def load_item_metadata(path: Optional[Union[str, Path]] = None, dataset: str = "GM") -> Dict[str, Dict]:
     """
     加载物品元数据。
 
     Args:
         path: JSON 文件路径
-              格式 {"item_id": {"title": str, "description": str, "category": str, "domain": str}}
+        dataset: "GM" 或 "AO"
 
     Returns:
         dict: {item_id: metadata_dict}
     """
     if path is None:
-        path = PROCESSED_DIR / "item_metadata.json"
+        path = get_processed_path("item_metadata.json", dataset)
     return load_json(path)
 
 
-def load_item_attributes(path: Optional[Union[str, Path]] = None) -> Dict[str, Dict]:
+def load_item_attributes(path: Optional[Union[str, Path]] = None, dataset: str = "GM") -> Dict[str, Dict]:
     """
     加载 LLM 提取的物品属性。
+
+    Args:
+        path: JSON 文件路径
+        dataset: "GM" 或 "AO"
 
     Returns:
         dict: {item_id: {"intro": str, "attributes": [str, ...]}}
     """
     if path is None:
-        path = PROCESSED_DIR / "item_attributes.json"
+        path = get_processed_path("item_attributes.json", dataset)
     return load_json(path)
 
 
-def load_id_mapping(path: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
+def load_id_mapping(path: Optional[Union[str, Path]] = None, dataset: str = "GM") -> Dict[str, Any]:
     """
     加载物品 ID 映射表。
+
+    Args:
+        path: JSON 文件路径
+        dataset: "GM" 或 "AO"
 
     Returns:
         dict with keys:
@@ -200,7 +251,7 @@ def load_id_mapping(path: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
             - domain_y_items: [item_ids in domain Y]
     """
     if path is None:
-        path = PROCESSED_DIR / "id_mapping.json"
+        path = get_processed_path("id_mapping.json", dataset)
     return load_json(path)
 
 

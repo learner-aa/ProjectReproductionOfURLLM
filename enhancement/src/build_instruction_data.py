@@ -10,7 +10,7 @@ import random
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from data_utils import PROCESSED_DIR, load_json, save_json
+from data_utils import PROCESSED_DIR, load_json, save_json, get_processed_path
 from prompt_templates import (
     PROMPT_II_RECOMMEND_BASE,
     PROMPT_II_RECOMMEND_WITH_PROFILE,
@@ -235,30 +235,31 @@ def convert_to_chatml(instructions: List[Dict]) -> List[Dict]:
 # 主流程
 # ============================================================
 
-def build_all_instruction_data(config: Dict):
+def build_all_instruction_data(config: Dict, dataset: str = "GM"):
     """
     构建全部 Instruction 数据集 (train/valid/test)。
 
     Args:
         config: pipeline 配置
+        dataset: "GM" 或 "AO"
     """
     logger.info("=" * 60)
-    logger.info("开始构建 Instruction 数据集")
+    logger.info(f"开始构建 Instruction 数据集 (dataset={dataset})")
     logger.info("=" * 60)
 
     # 加载数据
-    train_data = load_json(PROCESSED_DIR / "train.json")
-    valid_data = load_json(PROCESSED_DIR / "valid.json")
-    test_data = load_json(PROCESSED_DIR / "test.json")
-    item_metadata = load_json(PROCESSED_DIR / "item_metadata.json")
-    id_mapping = load_json(PROCESSED_DIR / "id_mapping.json")
+    train_data = load_json(get_processed_path("train.json", dataset))
+    valid_data = load_json(get_processed_path("valid.json", dataset))
+    test_data = load_json(get_processed_path("test.json", dataset))
+    item_metadata = load_json(get_processed_path("item_metadata.json", dataset))
+    id_mapping = load_json(get_processed_path("id_mapping.json", dataset))
 
     # 用户画像 (可选)
-    profile_path = PROCESSED_DIR / "user_profiles.json"
+    profile_path = get_processed_path("user_profiles.json", dataset)
     user_profiles = load_json(profile_path) if profile_path.exists() else {}
 
     # 物品属性 (可选)
-    attr_path = PROCESSED_DIR / "item_attributes.json"
+    attr_path = get_processed_path("item_attributes.json", dataset)
     item_attributes = load_json(attr_path) if attr_path.exists() else {}
 
     # 配置
@@ -296,9 +297,9 @@ def build_all_instruction_data(config: Dict):
         test_inst = convert_to_chatml(test_inst)
 
     # 保存
-    save_json(train_inst, PROCESSED_DIR / "train_instructions.json")
-    save_json(valid_inst, PROCESSED_DIR / "valid_instructions.json")
-    save_json(test_inst, PROCESSED_DIR / "test_instructions.json")
+    save_json(train_inst, get_processed_path("train_instructions.json", dataset))
+    save_json(valid_inst, get_processed_path("valid_instructions.json", dataset))
+    save_json(test_inst, get_processed_path("test_instructions.json", dataset))
 
     # 统计
     logger.info("=" * 60)
@@ -312,12 +313,16 @@ def build_all_instruction_data(config: Dict):
 
 
 if __name__ == "__main__":
+    import argparse
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     import yaml
+    ap = argparse.ArgumentParser(description="构建 Instruction 数据集")
+    ap.add_argument("--dataset", choices=["GM", "AO"], default="GM", help="数据集 (默认 GM)")
+    args = ap.parse_args()
     config_path = Path(__file__).parent.parent / "config" / "pipeline_config.yaml"
     if config_path.exists():
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
-        build_all_instruction_data(cfg)
+        build_all_instruction_data(cfg, dataset=args.dataset)
     else:
-        build_all_instruction_data({})
+        build_all_instruction_data({}, dataset=args.dataset)

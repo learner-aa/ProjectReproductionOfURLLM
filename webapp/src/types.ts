@@ -34,7 +34,82 @@ export interface DemoUser {
   retrievalPool: RetrievalCandidate[]
 }
 
-export type DatasetKey = 'movie-game'
+export type DatasetKey = 'GM'
+
+// 评测数据集 key：GM / AO 两个跨域推荐数据集
+export type EvalKey = 'GM' | 'AO'
+
+export interface EvalStats {
+  numUsers: number
+  testUsers: number
+  sourceItems: number
+  targetItems: number
+  sourceInteractions?: number
+  targetInteractions?: number
+  totalInteractions?: number
+  avgSeqLength: number
+  trainInstructions: number
+}
+
+export interface EvalMetrics {
+  hr1: number
+  hr5: number
+  hr10: number
+  hr20: number
+  ndcg1: number
+  ndcg5: number
+  ndcg10: number
+  ndcg20: number
+  mrr: number
+  fuzzyHr1: number
+  partialHr1: number
+  exactHr1: number
+  oodRate: number
+  oodCount: number
+  totalUsers: number
+  coldUsers: number
+  warmUsers: number
+}
+
+export interface DgBaseline {
+  hr1: number
+  hr5: number
+  hr10: number
+  hr20: number
+  mrr: number
+}
+
+export interface EvalTraining {
+  totalSteps: number
+  epochs: number
+  finalLoss: number
+  bestEvalLoss: number
+}
+
+export interface EvalDataset {
+  label: string
+  sourceDomain: string
+  targetDomain: string
+  stats: EvalStats
+  metrics: EvalMetrics
+  dgBaseline: DgBaseline
+  training: EvalTraining
+}
+
+export interface TrainingStep {
+  step: number
+  loss: number
+  learning_rate: number
+  epoch: number
+  eval_loss?: number
+}
+
+export interface TrainingLog {
+  steps: TrainingStep[]
+  description: string
+  total_steps: number
+  best_eval_loss: number
+}
 
 export interface Dataset {
   key: DatasetKey

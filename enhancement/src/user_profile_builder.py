@@ -23,6 +23,7 @@ from data_utils import (
     save_json,
     cosine_similarity,
     find_topk_similar,
+    get_processed_path,
 )
 from prompt_templates import (
     PROFILE_TEMPLATE_COMPACT,
@@ -415,24 +416,25 @@ def build_embedding_profiles_for_test_users(
 # 入口
 # ============================================================
 
-def run_profile_building(config: Dict):
+def run_profile_building(config: Dict, dataset: str = "GM"):
     """
     运行完整的画像构建流程。
 
     Args:
         config: pipeline 配置字典
+        dataset: "GM" 或 "AO"
     """
     logger.info("=" * 60)
-    logger.info("开始构建用户画像")
+    logger.info(f"开始构建用户画像 (dataset={dataset})")
     logger.info("=" * 60)
 
     # 加载数据
-    interactions = load_json(PROCESSED_DIR / "interactions.json")
-    item_metadata = load_json(PROCESSED_DIR / "item_metadata.json")
-    id_mapping = load_json(PROCESSED_DIR / "id_mapping.json")
+    interactions = load_json(get_processed_path("interactions.json", dataset))
+    item_metadata = load_json(get_processed_path("item_metadata.json", dataset))
+    id_mapping = load_json(get_processed_path("id_mapping.json", dataset))
 
     # 物品属性 (可选，如未提取则用空字典)
-    attr_path = PROCESSED_DIR / "item_attributes.json"
+    attr_path = get_processed_path("item_attributes.json", dataset)
     if attr_path.exists():
         item_attributes = load_json(attr_path)
     else:
@@ -442,7 +444,7 @@ def run_profile_building(config: Dict):
     # DG 特征 (可选)
     dg_features = None
     try:
-        dg_features = load_dg_features()
+        dg_features = load_dg_features(dataset=dataset)
     except FileNotFoundError:
         logger.warning("DG 特征文件不存在，特征画像将为空")
 
@@ -459,7 +461,8 @@ def run_profile_building(config: Dict):
     )
 
     # 保存用户画像
-    save_json(profiles, PROCESSED_DIR / "user_profiles.json")
+    profiles_path = get_processed_path("user_profiles.json", dataset)
+    save_json(profiles, profiles_path)
 
     # 为测试用户构建特征画像
     if dg_features is not None:
@@ -468,24 +471,29 @@ def run_profile_building(config: Dict):
             id_mapping=id_mapping,
             item_metadata=item_metadata,
         )
-        save_json(test_embedding_profiles, PROCESSED_DIR / "test_embedding_profiles.json")
+        save_json(test_embedding_profiles, get_processed_path("test_embedding_profiles.json", dataset))
 
     logger.info("=" * 60)
     logger.info("用户画像构建完成！")
-    logger.info(f"  画像文件: {PROCESSED_DIR / 'user_profiles.json'}")
+    logger.info(f"  画像文件: {profiles_path}")
     logger.info("=" * 60)
 
 
 if __name__ == "__main__":
+    import argparse
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     import yaml
     from pathlib import Path
+
+    ap = argparse.ArgumentParser(description="构建用户画像")
+    ap.add_argument("--dataset", choices=["GM", "AO"], default="GM", help="数据集 (默认 GM)")
+    args = ap.parse_args()
 
     config_path = Path(__file__).parent.parent / "config" / "pipeline_config.yaml"
     if config_path.exists():
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
-        run_profile_building(cfg)
+        run_profile_building(cfg, dataset=args.dataset)
     else:
         logger.info(f"使用默认配置运行")
-        run_profile_building({})
+        run_profile_building({}, dataset=args.dataset)

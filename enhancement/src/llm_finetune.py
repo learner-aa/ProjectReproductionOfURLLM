@@ -8,6 +8,8 @@ LLM LoRA 微调模块
 - 支持多 GPU (DeepSpeed / FSDP)
 """
 
+import torch
+
 import json
 import logging
 import os
@@ -122,6 +124,7 @@ def load_model_and_tokenizer(model_config: Dict, training_config: Dict):
         (model, tokenizer)
     """
     try:
+        import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
         from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
     except ImportError:
@@ -139,16 +142,24 @@ def load_model_and_tokenizer(model_config: Dict, training_config: Dict):
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    # 加载模型
+    # 加载模型 (FP16, 不依赖 bitsandbytes)
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
-        torch_dtype="auto",
+        torch_dtype=torch.float16,
         device_map="auto",
         trust_remote_code=True,
     )
 
-    # 准备模型 (梯度检查点等)
-    model = prepare_model_for_kbit_training(model)
+    # 显式确保模型在 GPU 上
+    if torch.cuda.is_available():
+        model = model.to("cuda")
+        logger.info(f"模型已移至 GPU: {next(model.parameters()).device}")
+
+    # 启用梯度检查点 (节省显存)
+    model.config.use_cache = False
+    model.gradient_checkpointing_enable()
+    if hasattr(model, "enable_input_require_grads"):
+        model.enable_input_require_grads()
 
     # 应用 LoRA
     lora_config = LoraConfig(
@@ -228,7 +239,9 @@ def train(config: Optional[Dict] = None):
     eval_dataset = SimpleDataset(valid_data) if valid_data else None
 
     # 训练参数
-    save_dir = str(OUTPUT_DIR / "lora_weights")
+    output_config = config.get("output", {})
+    save_dir = str(OUTPUT_DIR / output_config.get("save_dir", "lora_weights"))
+    log_dir = str(OUTPUT_DIR / output_config.get("log_dir", "logs"))
     training_args = TrainingArguments(
         output_dir=save_dir,
         num_train_epochs=training_config.get("num_epochs", 3),
@@ -247,10 +260,11 @@ def train(config: Optional[Dict] = None):
         eval_strategy="steps" if eval_dataset else "no",
         save_strategy="steps",
         load_best_model_at_end=eval_dataset is not None,
-        logging_dir=str(OUTPUT_DIR / "logs"),
+        logging_dir=log_dir,
         report_to=["tensorboard"],
-        dataloader_pin_memory=True,
+        dataloader_pin_memory=False,
         remove_unused_columns=False,
+        use_cpu=False,
     )
 
     # Trainer
@@ -274,7 +288,7 @@ def train(config: Optional[Dict] = None):
     trainer.train()
 
     # 保存最终模型
-    final_path = str(OUTPUT_DIR / "lora_weights" / "final")
+    final_path = save_dir
     trainer.save_model(final_path)
     tokenizer.save_pretrained(final_path)
 
@@ -286,10 +300,18 @@ def train(config: Optional[Dict] = None):
 # ============================================================
 
 if __name__ == "__main__":
+    import argparse
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     import yaml
 
-    config_path = Path(__file__).parent.parent / "config" / "lora_config.yaml"
+    ap = argparse.ArgumentParser(description="LoRA 微调训练")
+    ap.add_argument("--config", type=str, default=None, help="配置文件路径 (默认 lora_config.yaml)")
+    args = ap.parse_args()
+
+    if args.config:
+        config_path = Path(args.config)
+    else:
+        config_path = Path(__file__).parent.parent / "config" / "lora_config.yaml"
     if config_path.exists():
         with open(config_path) as f:
             cfg = yaml.safe_load(f)

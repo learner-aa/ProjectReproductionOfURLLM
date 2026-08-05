@@ -1,0 +1,53 @@
+# ============================================================
+# LoRA 微调配置 (AO 数据集 - Llama2-7B FP16)
+# ============================================================
+
+# 基座模型
+model:
+  base_model: "/root/autodl-tmp/URLLM-project/models/Llama-2-7b"
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  lora_target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+# 训练参数
+training:
+  num_epochs: 2
+  max_steps: -1
+  batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 1.0e-4
+  warmup_ratio: 0.03
+  max_seq_length: 1024
+  weight_decay: 0.01
+  fp16: true
+  bf16: false
+  logging_steps: 10
+  save_steps: 500
+  eval_steps: 500
+  save_total_limit: 3
+  gradient_checkpointing: true
+
+# 数据路径 (AO 数据集)
+data:
+  train_file: "train_instructions_AO.json"
+  valid_file: "valid_instructions_AO.json"
+
+# 推理配置
+inference:
+  batch_size: 8
+  temperature: 0.1
+  max_new_tokens: 128
+
+# 输出
+# 注意: 实际权重保存在 outputs/lora_weights/ 根目录 (训练时 Trainer output_dir 行为)
+output:
+  save_dir: "lora_weights"
+  log_dir: "logs_AO"

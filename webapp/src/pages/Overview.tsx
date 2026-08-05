@@ -1,108 +1,200 @@
-import datasetStats from '../data/dataset_stats.json'
-import { Database, Cpu, GitBranch, TrendingUp, Users, Package, FileText, CheckCircle2 } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { evalData } from '../mockData'
+import type { EvalDataset, EvalKey } from '../types'
+import { TrendingUp, Target, Users, ArrowRight, Database, Package } from 'lucide-react'
 
-const PIPELINE_STAGES = [
-  { name: '数据预处理', desc: 'GM 数据集解析为 train/valid/test', icon: Database },
-  { name: '属性提取', desc: 'DeepSeek API 提取物品属性', icon: Package },
-  { name: '用户画像', desc: '行为特征 + 语义偏好画像', icon: Users },
-  { name: '指令构建', desc: 'Alpaca 格式训练指令', icon: GitBranch },
-  { name: 'LoRA 微调', desc: 'Qwen2-1.5B + LoRA (500 steps)', icon: Cpu },
-  { name: '推理', desc: '批量推理生成推荐', icon: TrendingUp },
-  { name: '评估', desc: 'HR@K / NDCG@K / MRR', icon: FileText },
-]
+const fmt = (v: number) => v.toFixed(4)
+
+function CoreResultCard({
+  label,
+  value,
+  baseline,
+  baselineLabel,
+  isCount,
+  highlight,
+  icon,
+}: {
+  label: string
+  value: number
+  baseline?: number
+  baselineLabel?: string
+  isCount?: boolean
+  highlight?: boolean
+  icon: ReactNode
+}) {
+  const display = isCount ? value.toLocaleString() : fmt(value)
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center justify-between">
+        <div
+          className={`flex h-9 w-9 items-center justify-center rounded-lg ${
+            highlight ? 'bg-blue-50 text-blue-600' : 'bg-cyan-50 text-cyan-600'
+          }`}
+        >
+          {icon}
+        </div>
+        <span className="text-xs text-gray-400">{label}</span>
+      </div>
+      <div className="mt-3 text-2xl font-bold text-gray-900 tabular-nums">{display}</div>
+      <div className="mt-2 flex items-center gap-1 text-xs text-gray-500">
+        {baseline !== undefined && baselineLabel !== undefined && (
+          <>
+            <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-500">
+              {baselineLabel} {fmt(baseline)}
+            </span>
+            {value > baseline && (
+              <span className="font-medium text-blue-600">显著优于基线</span>
+            )}
+          </>
+        )}
+        {isCount && (
+          <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-500">{baselineLabel}</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function DatasetOverviewCard({ data, name }: { data: EvalDataset; name: string }) {
+  const { stats, sourceDomain, targetDomain } = data
+  const interactionText = stats.sourceInteractions && stats.targetInteractions
+    ? `源 ${stats.sourceInteractions.toLocaleString()} / 目标 ${stats.targetInteractions.toLocaleString()}`
+    : stats.totalInteractions
+      ? stats.totalInteractions.toLocaleString()
+      : '—'
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+        <div className="text-sm font-semibold text-gray-800">{name} 数据集</div>
+        <span className="text-xs text-gray-400">{data.label}</span>
+      </div>
+
+      <div className="mt-3 flex items-center gap-2 text-xs text-gray-500">
+        <span className="rounded bg-blue-50 px-2 py-0.5 font-medium text-blue-700">{sourceDomain}</span>
+        <ArrowRight size={12} className="text-gray-400" />
+        <span className="rounded bg-cyan-50 px-2 py-0.5 font-medium text-cyan-700">{targetDomain}</span>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+        <div>
+          <div className="flex items-center gap-1 text-xs text-gray-400">
+            <Users size={12} /> 用户总数
+          </div>
+          <div className="mt-0.5 font-semibold text-gray-900 tabular-nums">
+            {stats.numUsers.toLocaleString()}
+          </div>
+        </div>
+        <div>
+          <div className="flex items-center gap-1 text-xs text-gray-400">
+            <Users size={12} /> 测试用户
+          </div>
+          <div className="mt-0.5 font-semibold text-gray-900 tabular-nums">
+            {stats.testUsers.toLocaleString()}
+          </div>
+        </div>
+        <div>
+          <div className="flex items-center gap-1 text-xs text-gray-400">
+            <Package size={12} /> 源域物品
+          </div>
+          <div className="mt-0.5 font-semibold text-gray-900 tabular-nums">
+            {stats.sourceItems.toLocaleString()}
+          </div>
+        </div>
+        <div>
+          <div className="flex items-center gap-1 text-xs text-gray-400">
+            <Package size={12} /> 目标域物品
+          </div>
+          <div className="mt-0.5 font-semibold text-gray-900 tabular-nums">
+            {stats.targetItems.toLocaleString()}
+          </div>
+        </div>
+        <div className="col-span-2">
+          <div className="flex items-center gap-1 text-xs text-gray-400">
+            <Database size={12} /> 交互数
+          </div>
+          <div className="mt-0.5 font-semibold text-gray-900 tabular-nums">{interactionText}</div>
+        </div>
+        <div className="col-span-2">
+          <div className="flex items-center gap-1 text-xs text-gray-400">训练指令数</div>
+          <div className="mt-0.5 font-semibold text-gray-900 tabular-nums">
+            {stats.trainInstructions.toLocaleString()}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export function Overview() {
-  const stats = (datasetStats as any).movie_game
+  const gm = evalData.GM
+  const ao = evalData.AO
+  const totalTestUsers = gm.metrics.totalUsers + ao.metrics.totalUsers
 
   return (
     <div className="space-y-6">
-      {/* 项目简介 */}
+      {/* 项目标题 */}
       <div className="rounded-2xl border border-gray-200 bg-gradient-to-br from-blue-50 to-white p-6 shadow-sm">
         <h1 className="text-2xl font-bold text-gray-900">URLLM 跨域序列推荐</h1>
         <p className="mt-2 text-sm leading-relaxed text-gray-600">
-          基于 LLM + 用户画像增强的跨域序列推荐系统。使用 Qwen2-1.5B-Instruct 作为基座模型，
-          通过 LoRA 微调学习用户偏好模式，实现从源域(Entertainment)到目标域(Education)的跨域推荐。
-          Pipeline 包含数据预处理、属性提取、用户画像、指令构建、LoRA 微调、推理、评估 7 个阶段。
+          基于大语言模型与用户画像增强的跨域推荐方法
         </p>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <span className="rounded-lg bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700">Qwen2-1.5B-Instruct</span>
-          <span className="rounded-lg bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-700">LoRA r=8</span>
-          <span className="rounded-lg bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">500 steps</span>
-          <span className="rounded-lg bg-sky-100 px-3 py-1 text-xs font-medium text-sky-700">GM Dataset</span>
+        <p className="mt-3 text-xs leading-relaxed text-gray-500">
+          在 GM 与 AO 两个跨域数据集上完成从源域行为到目标域推荐的迁移评测，
+          覆盖 {totalTestUsers.toLocaleString()} 位测试用户。
+        </p>
+      </div>
+
+      {/* 核心成果卡片 */}
+      <div>
+        <div className="mb-3 text-sm font-semibold text-gray-800">核心成果</div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <CoreResultCard
+            label="GM HR@1"
+            value={gm.metrics.hr1}
+            baseline={gm.dgBaseline.hr1}
+            baselineLabel="DG 基线"
+            highlight
+            icon={<TrendingUp size={18} />}
+          />
+          <CoreResultCard
+            label="AO HR@1"
+            value={ao.metrics.hr1}
+            baseline={ao.dgBaseline.hr1}
+            baselineLabel="DG 基线"
+            highlight
+            icon={<TrendingUp size={18} />}
+          />
+          <CoreResultCard
+            label="GM MRR"
+            value={gm.metrics.mrr}
+            baseline={gm.dgBaseline.mrr}
+            baselineLabel="DG 基线"
+            icon={<Target size={18} />}
+          />
+          <CoreResultCard
+            label="测试用户"
+            value={totalTestUsers}
+            isCount
+            baselineLabel={`GM ${gm.metrics.totalUsers} + AO ${ao.metrics.totalUsers}`}
+            icon={<Users size={18} />}
+          />
         </div>
       </div>
 
-      {/* Pipeline 流程 */}
-      <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-        <h2 className="mb-4 text-sm font-semibold text-gray-800">增强 Pipeline 流程 (7 Stages)</h2>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {PIPELINE_STAGES.map((stage, idx) => {
-            const Icon = stage.icon
-            return (
-              <div key={idx} className="rounded-xl border border-gray-100 bg-gray-50/60 p-4 transition hover:border-blue-200 hover:bg-blue-50/30">
-                <div className="flex items-center justify-between">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 text-blue-600">
-                    <Icon size={16} />
-                  </div>
-                  <span className="flex items-center gap-1 text-xs font-medium text-emerald-600">
-                    <CheckCircle2 size={12} />
-                    Stage {idx + 1}
-                  </span>
-                </div>
-                <div className="mt-2 text-sm font-semibold text-gray-800">{stage.name}</div>
-                <div className="mt-1 text-xs text-gray-500">{stage.desc}</div>
-              </div>
-            )
-          })}
+      {/* 双数据集概览 */}
+      <div>
+        <div className="mb-3 text-sm font-semibold text-gray-800">双数据集概览</div>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {(['GM', 'AO'] as EvalKey[]).map((k) => (
+            <DatasetOverviewCard key={k} name={k} data={evalData[k]} />
+          ))}
         </div>
       </div>
 
-      {/* 数据集统计 */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-2 text-xs text-gray-400">
-            <Users size={14} />
-            用户总数
-          </div>
-          <div className="mt-1 text-2xl font-bold text-gray-900">{stats.num_users.toLocaleString()}</div>
-          <div className="mt-1 text-xs text-gray-400">平均序列长度: {stats.avg_sequence_length}</div>
-        </div>
-        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-2 text-xs text-gray-400">
-            <Package size={14} />
-            源域 (Entertainment)
-          </div>
-          <div className="mt-1 text-2xl font-bold text-gray-900">{stats.source_domain.num_items.toLocaleString()}</div>
-          <div className="mt-1 text-xs text-gray-400">{stats.source_domain.num_interactions.toLocaleString()} 次交互</div>
-        </div>
-        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-2 text-xs text-gray-400">
-            <Package size={14} />
-            目标域 (Education)
-          </div>
-          <div className="mt-1 text-2xl font-bold text-gray-900">{stats.target_domain.num_items.toLocaleString()}</div>
-          <div className="mt-1 text-xs text-gray-400">{stats.target_domain.num_interactions.toLocaleString()} 次交互</div>
-        </div>
-      </div>
-
-      {/* 关键数字 */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <div className="rounded-2xl border border-gray-200 bg-white p-5 text-center shadow-sm">
-          <div className="text-2xl font-bold text-blue-600">31,570</div>
-          <div className="mt-1 text-xs text-gray-500">训练指令</div>
-        </div>
-        <div className="rounded-2xl border border-gray-200 bg-white p-5 text-center shadow-sm">
-          <div className="text-2xl font-bold text-emerald-600">3,601</div>
-          <div className="mt-1 text-xs text-gray-500">测试样本</div>
-        </div>
-        <div className="rounded-2xl border border-gray-200 bg-white p-5 text-center shadow-sm">
-          <div className="text-2xl font-bold text-amber-600">1,089,536</div>
-          <div className="mt-1 text-xs text-gray-500">可训练参数</div>
-        </div>
-        <div className="rounded-2xl border border-gray-200 bg-white p-5 text-center shadow-sm">
-          <div className="text-2xl font-bold text-sky-600">0.0705%</div>
-          <div className="mt-1 text-xs text-gray-500">参数占比</div>
-        </div>
+      {/* 方法一句话 */}
+      <div className="rounded-2xl border border-blue-100 bg-blue-50/50 p-5 text-sm leading-relaxed text-gray-700">
+        <span className="font-semibold text-blue-700">方法概述：</span>
+        通过用户画像构建与大语言模型微调，将源域行为模式迁移至目标域，实现跨域个性化推荐。
       </div>
     </div>
   )

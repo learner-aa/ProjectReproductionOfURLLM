@@ -20,11 +20,9 @@ def main():
     prompter = Prompter("alpaca")
     print(f"[1/4] 加载 tokenizer: {base_model}")
     tokenizer = LlamaTokenizer.from_pretrained(base_model)
-    print(f"[2/4] 加载模型 (8bit): {base_model}")
-    bnb_config_8bit = BitsAndBytesConfig(load_in_8bit=True)
+    print(f"[2/4] 加载模型 (FP16): {base_model}")
     model = LlamaForCausalLM.from_pretrained(
         base_model,
-        quantization_config=bnb_config_8bit,
         torch_dtype=torch.float16,
         device_map="auto",
     )

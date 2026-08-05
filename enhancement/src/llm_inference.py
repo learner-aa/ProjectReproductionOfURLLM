@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from data_utils import OUTPUT_DIR, PROCESSED_DIR, load_json, save_json, ensure_dirs
+from data_utils import OUTPUT_DIR, PROCESSED_DIR, load_json, save_json, ensure_dirs, get_processed_path, get_dataset_suffix
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +180,9 @@ class LLMRecommender:
                 )
 
             for j, output in enumerate(outputs):
-                input_len = inputs["input_ids"][j].ne(self._tokenizer.pad_token_id).sum()
+                # left padding 下, 生成内容位于输入序列长度之后
+                # 用 shape[1] (含 padding 的输入长度) 而非非pad token数, 避免错误截取
+                input_len = inputs["input_ids"].shape[1]
                 new_tokens = output[input_len:]
                 generated = self._tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
                 result = generated.split("\n")[0].strip()
@@ -230,6 +232,7 @@ def run_inference(
     test_file: Optional[str] = None,
     lora_path: Optional[str] = None,
     config: Optional[Dict] = None,
+    dataset: str = "GM",
 ):
     """
     执行测试集推理。
@@ -238,13 +241,15 @@ def run_inference(
         test_file: 测试集 instruction 文件路径
         lora_path: LoRA 权重路径
         config: 配置字典
+        dataset: "GM" 或 "AO"
     """
     ensure_dirs()
 
     if test_file is None:
-        test_file = str(PROCESSED_DIR / "test_instructions.json")
+        test_file = str(get_processed_path("test_instructions.json", dataset))
     if lora_path is None:
-        lora_path = str(OUTPUT_DIR / "lora_weights" / "final")
+        output_cfg = (config or {}).get("output", {})
+        lora_path = str(OUTPUT_DIR / output_cfg.get("save_dir", "lora_weights"))
 
     cfg = config or {}
     base_model = cfg.get("model", {}).get("base_model", "meta-llama/Llama-2-7b-chat-hf")
@@ -291,7 +296,8 @@ def run_inference(
         })
 
     # 保存
-    output_file = str(OUTPUT_DIR / "predictions" / "test_predictions.json")
+    suffix = get_dataset_suffix(dataset)
+    output_file = str(OUTPUT_DIR / "predictions" / f"test_predictions{suffix}.json")
     save_json(results, output_file)
 
     # 统计
@@ -315,12 +321,21 @@ def run_inference(
 # ============================================================
 
 if __name__ == "__main__":
+    import argparse
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     import yaml
 
-    config_path = Path(__file__).parent.parent / "config" / "lora_config.yaml"
+    ap = argparse.ArgumentParser(description="LLM 推理")
+    ap.add_argument("--config", type=str, default=None, help="配置文件路径")
+    ap.add_argument("--dataset", choices=["GM", "AO"], default="GM", help="数据集 (默认 GM)")
+    args = ap.parse_args()
+
+    if args.config:
+        config_path = Path(args.config)
+    else:
+        config_path = Path(__file__).parent.parent / "config" / "lora_config.yaml"
     cfg = {}
     if config_path.exists():
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
-    run_inference(config=cfg)
+    run_inference(config=cfg, dataset=args.dataset)

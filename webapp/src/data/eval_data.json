@@ -1,0 +1,95 @@
+{
+  "GM": {
+    "label": "影视 · 游戏",
+    "sourceDomain": "Movie",
+    "targetDomain": "Game",
+    "stats": {
+      "numUsers": 40479,
+      "testUsers": 3601,
+      "sourceItems": 57088,
+      "targetItems": 107792,
+      "sourceInteractions": 365293,
+      "targetInteractions": 329066,
+      "avgSeqLength": 17.15,
+      "trainInstructions": 31570
+    },
+    "metrics": {
+      "hr1": 0.0147,
+      "hr5": 0.0169,
+      "hr10": 0.0181,
+      "hr20": 0.0183,
+      "ndcg1": 0.0147,
+      "ndcg5": 0.0159,
+      "ndcg10": 0.0162,
+      "ndcg20": 0.0163,
+      "mrr": 0.0157,
+      "fuzzyHr1": 0.0197,
+      "partialHr1": 0.0274,
+      "exactHr1": 0.0150,
+      "oodRate": 0.8898,
+      "oodCount": 3204,
+      "totalUsers": 3601,
+      "coldUsers": 0,
+      "warmUsers": 3601
+    },
+    "dgBaseline": {
+      "hr1": 0.0,
+      "hr5": 0.0,
+      "hr10": 0.0,
+      "hr20": 0.0003,
+      "mrr": 0.0001
+    },
+    "training": {
+      "totalSteps": 7894,
+      "epochs": 2,
+      "finalLoss": 0.4673,
+      "bestEvalLoss": 0.4346
+    }
+  },
+  "AO": {
+    "label": "办公 · 艺术",
+    "sourceDomain": "Office",
+    "targetDomain": "Art",
+    "stats": {
+      "numUsers": 9577,
+      "testUsers": 1000,
+      "sourceItems": 18639,
+      "targetItems": 15242,
+      "totalInteractions": 198964,
+      "avgSeqLength": 20.78,
+      "trainInstructions": 8000
+    },
+    "metrics": {
+      "hr1": 0.0020,
+      "hr5": 0.0030,
+      "hr10": 0.0030,
+      "hr20": 0.0040,
+      "ndcg1": 0.0020,
+      "ndcg5": 0.0026,
+      "ndcg10": 0.0026,
+      "ndcg20": 0.0029,
+      "mrr": 0.0026,
+      "fuzzyHr1": 0.0030,
+      "partialHr1": 0.0025,
+      "exactHr1": 0.0020,
+      "oodRate": 0.924,
+      "oodCount": 924,
+      "totalUsers": 1000,
+      "coldUsers": 0,
+      "warmUsers": 1000
+    },
+    "dgBaseline": {
+      "hr1": 0.0,
+      "hr5": 0.0,
+      "hr10": 0.0,
+      "hr20": 0.0010,
+      "mrr": 0.0003
+    },
+    "training": {
+      "totalSteps": 2000,
+      "epochs": 2,
+      "finalLoss": 0.3975,
+      "bestEvalLoss": 0.4266
+    }
+  }
+}

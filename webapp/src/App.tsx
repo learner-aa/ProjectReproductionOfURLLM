@@ -1,33 +1,38 @@
 import { useMemo, useState } from 'react'
 import { datasets } from './mockData'
-import type { DatasetKey } from './types'
 import { Workbench } from './pages/Workbench'
-import { RetrievalView } from './pages/RetrievalView'
 import { Dashboard } from './pages/Dashboard'
 import { Overview } from './pages/Overview'
-import { Sparkles, LayoutDashboard, Users, BarChart3, Compass } from 'lucide-react'
+import { Method } from './pages/Method'
+import { Sparkles, LayoutDashboard, BarChart3, Compass, GitBranch } from 'lucide-react'
 
-type Page = 'overview' | 'workbench' | 'retrieval' | 'dashboard'
+type Page = 'overview' | 'method' | 'workbench' | 'dashboard'
 
 const NAV: { key: Page; label: string; icon: typeof Compass }[] = [
   { key: 'overview', label: '项目概览', icon: Compass },
-  { key: 'workbench', label: '推荐工作台', icon: LayoutDashboard },
-  { key: 'retrieval', label: '相似用户检索', icon: Users },
+  { key: 'method', label: '方法流程', icon: GitBranch },
+  { key: 'workbench', label: '推荐展示', icon: LayoutDashboard },
   { key: 'dashboard', label: '效果评测', icon: BarChart3 },
 ]
 
 function App() {
   const [page, setPage] = useState<Page>('overview')
 
-  const [datasetKey] = useState<DatasetKey>('movie-game')
-  const dataset = useMemo(() => datasets.find((d) => d.key === datasetKey)!, [datasetKey])
-
+  // 推荐展示：支持 GM / AO 数据集切换
+  const [wbKey, setWbKey] = useState<'GM' | 'AO'>('GM')
+  const dataset = useMemo(() => datasets.find((d) => d.key === wbKey) ?? datasets[0], [wbKey])
   const [userId, setUserId] = useState(dataset.users[0].id)
   const currentUser = dataset.users.find((u) => u.id === userId) ?? dataset.users[0]
 
   function handleRandomUser() {
     const idx = Math.floor(Math.random() * dataset.users.length)
     setUserId(dataset.users[idx].id)
+  }
+
+  function handleSwitchDataset(key: 'GM' | 'AO') {
+    setWbKey(key)
+    const ds = datasets.find((d) => d.key === key)
+    if (ds) setUserId(ds.users[0].id)
   }
 
   return (
@@ -67,41 +72,24 @@ function App() {
               })}
             </nav>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="hidden text-xs text-gray-400 sm:inline">数据集</span>
-            <span className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-700">
-              {dataset.label}
-            </span>
-          </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-6xl px-6 py-8">
         {page === 'overview' && <Overview />}
+        {page === 'method' && <Method />}
         {page === 'workbench' && (
           <Workbench
             dataset={dataset}
             currentUser={currentUser}
             onSelectUser={setUserId}
             onRandomUser={handleRandomUser}
+            datasetKey={wbKey}
+            onSwitchDataset={handleSwitchDataset}
           />
         )}
-        {page === 'retrieval' && (
-          <RetrievalView
-            dataset={dataset}
-            currentUser={currentUser}
-            onSelectUser={setUserId}
-            onRandomUser={handleRandomUser}
-          />
-        )}
-        {page === 'dashboard' && <Dashboard datasetKey={datasetKey} />}
+        {page === 'dashboard' && <Dashboard />}
       </main>
-
-      <footer className="border-t border-gray-200 bg-white">
-        <div className="mx-auto max-w-6xl px-6 py-4 text-center text-xs text-gray-400">
-          URLLM 跨域序列推荐系统演示
-        </div>
-      </footer>
     </div>
   )
 }

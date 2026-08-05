@@ -24,6 +24,7 @@ from data_utils import (
     OUTPUT_DIR, PROCESSED_DIR,
     load_json, save_json,
     load_dg_scores, load_dg_candidates, load_dg_config,
+    get_processed_path, get_dataset_suffix,
 )
 
 logger = logging.getLogger(__name__)
@@ -397,6 +398,7 @@ def evaluate_dg_baseline(
     test_data: Dict[str, Dict],
     id_mapping: Dict[str, Any],
     k_values: List[int] = [1, 5, 10, 20],
+    dataset: str = "GM",
 ) -> Dict[str, float]:
     """
     从 DG 模型的评分矩阵计算基线指标。
@@ -405,12 +407,13 @@ def evaluate_dg_baseline(
         test_data: 测试集数据
         id_mapping: ID 映射表
         k_values: K 值列表
+        dataset: "GM" 或 "AO"
 
     Returns:
         指标字典
     """
     try:
-        scores = load_dg_scores()
+        scores = load_dg_scores(dataset=dataset)
     except FileNotFoundError:
         logger.warning("DG 评分矩阵不存在，跳过基线评估")
         return {}
@@ -498,19 +501,21 @@ def compute_out_of_domain_rate(
 # 主评估流程
 # ============================================================
 
-def run_evaluation(config: Optional[Dict] = None):
+def run_evaluation(config: Optional[Dict] = None, dataset: str = "GM"):
     """
     执行完整评估流程。
 
     Args:
         config: 配置字典
+        dataset: "GM" 或 "AO"
     """
     logger.info("=" * 60)
-    logger.info("开始评估")
+    logger.info(f"开始评估 (dataset={dataset})")
     logger.info("=" * 60)
 
     # 加载推理结果
-    pred_file = OUTPUT_DIR / "predictions" / "test_predictions.json"
+    suffix = get_dataset_suffix(dataset)
+    pred_file = OUTPUT_DIR / "predictions" / f"test_predictions{suffix}.json"
     if not pred_file.exists():
         logger.error(f"推理结果不存在: {pred_file}")
         return
@@ -541,7 +546,7 @@ def run_evaluation(config: Optional[Dict] = None):
     # 3. 加载 item_metadata，提取 title_to_id / title_to_domain 后立即释放
     title_to_id = {}
     title_to_domain = {}
-    meta_path = PROCESSED_DIR / "item_metadata.json"
+    meta_path = get_processed_path("item_metadata.json", dataset)
     if meta_path.exists():
         item_metadata = load_json(meta_path)
         for iid, info in item_metadata.items():
@@ -557,7 +562,7 @@ def run_evaluation(config: Optional[Dict] = None):
 
     # 4. 加载 item_attributes，构建属性索引后立即释放
     item_id_to_attrs, attr_to_items = {}, defaultdict(set)
-    attr_path = PROCESSED_DIR / "item_attributes.json"
+    attr_path = get_processed_path("item_attributes.json", dataset)
     if attr_path.exists():
         item_attributes = load_json(attr_path)
         item_id_to_attrs, attr_to_items = build_attribute_index(item_attributes)
@@ -569,7 +574,7 @@ def run_evaluation(config: Optional[Dict] = None):
     expanded_metrics = {}
     if item_id_to_attrs and title_to_id:
         target_item_ids = []
-        test_instructions_path = PROCESSED_DIR / "test_instructions.json"
+        test_instructions_path = get_processed_path("test_instructions.json", dataset)
         if test_instructions_path.exists():
             test_items = load_json(test_instructions_path)
             user_to_target = {}
@@ -596,7 +601,7 @@ def run_evaluation(config: Optional[Dict] = None):
 
     # 6. 冷/热启动分析 (加载 interactions，用完即释放)
     cold_warm = None
-    inter_path = PROCESSED_DIR / "interactions.json"
+    inter_path = get_processed_path("interactions.json", dataset)
     if inter_path.exists():
         interactions = load_json(inter_path)
         cold_warm = analyze_cold_warm_start(results, interactions)
@@ -620,13 +625,13 @@ def run_evaluation(config: Optional[Dict] = None):
 
     # 8. DG 基线对比 (加载 test_data + id_mapping，用完即释放)
     dg_metrics = {}
-    test_path = PROCESSED_DIR / "test.json"
-    map_path = PROCESSED_DIR / "id_mapping.json"
+    test_path = get_processed_path("test.json", dataset)
+    map_path = get_processed_path("id_mapping.json", dataset)
     if test_path.exists() and map_path.exists():
         test_data = load_json(test_path)
         id_mapping = load_json(map_path)
         if test_data and id_mapping:
-            dg_metrics = evaluate_dg_baseline(test_data, id_mapping)
+            dg_metrics = evaluate_dg_baseline(test_data, id_mapping, dataset=dataset)
             del test_data, id_mapping
             gc.collect()
             if dg_metrics:
@@ -648,7 +653,7 @@ def run_evaluation(config: Optional[Dict] = None):
     if dg_metrics:
         eval_result["dg_baseline"] = dg_metrics
 
-    eval_file = str(OUTPUT_DIR / "eval_results" / "evaluation.json")
+    eval_file = str(OUTPUT_DIR / "eval_results" / f"evaluation{suffix}.json")
     save_json(eval_result, eval_file)
     logger.info(f"评估结果已保存: {eval_file}")
 
@@ -667,5 +672,9 @@ def run_evaluation(config: Optional[Dict] = None):
 # ============================================================
 
 if __name__ == "__main__":
+    import argparse
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    run_evaluation()
+    ap = argparse.ArgumentParser(description="评估推荐结果")
+    ap.add_argument("--dataset", choices=["GM", "AO"], default="GM", help="数据集 (默认 GM)")
+    args = ap.parse_args()
+    run_evaluation(dataset=args.dataset)

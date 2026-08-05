@@ -455,6 +455,12 @@ def train():
     )
 
     if model_args.model_name_or_path:
+        if model_args.load_in_bits == 4:
+            quant_config = bnb_config_4bit
+        elif model_args.load_in_bits == 8:
+            quant_config = bnb_config_8bit
+        else:
+            quant_config = None  # FP16 不量化
         model = AutoModelForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             from_tf=bool(".ckpt" in model_args.model_name_or_path),
@@ -462,7 +468,7 @@ def train():
             cache_dir=model_args.cache_dir,
             revision=model_args.model_revision,
             torch_dtype=torch.float16,
-            quantization_config=bnb_config_4bit if model_args.load_in_bits == 4 else bnb_config_8bit,
+            quantization_config=quant_config,
             device_map={"": int(os.environ.get("LOCAL_RANK") or 0)}
         )  # .half().cuda()
     else:
