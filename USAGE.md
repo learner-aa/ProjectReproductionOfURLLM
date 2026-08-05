@@ -34,9 +34,9 @@
 
 复现论文 *Exploring User Retrieval Integration towards Large Language Models for Cross-Domain Sequential Recommendation* (arXiv:2406.03085)，验证 **LLM + 用户画像增强** 对跨域序列推荐的效果。
 
-- **基座模型**:Llama-2-7b + 8bit QLoRA
-- **数据集**:GM(Movie-Game),40,479 用户 / 164,880 物品
-- **核心成果**:HR@1 和 MRR 远超 DG 基线约 157 倍
+- **基座模型**:Llama-2-7b + 8bit QLoRA(GM) / FP16(AO)
+- **数据集**:GM(Movie-Game) + AO(Office-Art) 双数据集,共 50,056 用户
+- **核心成果**:GM 数据集 HR@1 和 MRR 远超 DG 基线约 157 倍;AO 数据集 HR@20 提升 4 倍
 
 完整 Pipeline 分 7 阶段:
 
@@ -125,15 +125,20 @@ unzip lora-weights.zip -d enhancement/outputs/lora_weights/llama2_final/
 
 > 含 `adapter_model.safetensors` + `adapter_config.json`,推理必需。
 
-### (c) DG 基线数据(691M,可选)
+### (c) DG 基线数据(GM 691M + AO 1.1G,可选)
 
 若需对比 DG 基线,从 GitHub Release 下载:
 ```bash
+# GM 数据集 DG 评分矩阵(.npy)
 wget https://github.com/learner-aa/ProjectReproductionOfURLLM/releases/download/v1.0.0/dg-npy.zip
 unzip dg-npy.zip -d DG_Final/
+
+# AO 数据集 DG 基线模型权重(.pt,各 312M)
+wget https://github.com/learner-aa/ProjectReproductionOfURLLM/releases/download/v1.0.0/dg-ao-weights.zip
+unzip dg-ao-weights.zip -d DG_Final/AO/DG/
 ```
 
-> 含 DG 基线模型评分矩阵(.npy),仅评估对比时需要。
+> GM 含 DG 评分矩阵(.npy);AO 含 DG 基线模型权重(.pt),仅评估对比时需要。
 
 ---
 
@@ -191,8 +196,9 @@ base_model: "/你的路径/URLLM-project/models/Llama-2-7b-hf"
 |------|------|--------|------|
 | 只看前端展示 | ~5 分钟 | 无需模型 | `cd webapp && npm install && npm run dev` |
 | 运行评估 | ~10 分钟 | 无需模型 | `cd enhancement && python src/evaluate.py` |
-| 完整推理 | 较长 | 模型 + LoRA 权重 + GPU | `cd llama2-SFT && python run_inference.py` |
-| 一键全流程 | 最长 | 模型 + LoRA 权重 + GPU | `cd llama2-SFT && bash run_llama2.sh` |
+| GM 完整推理 | 较长 | 模型 + LoRA 权重 + GPU | `cd llama2-SFT && python run_inference.py` |
+| GM 一键全流程 | 最长 | 模型 + LoRA 权重 + GPU | `cd llama2-SFT && bash run_llama2.sh` |
+| AO 一键全流程 | 较长 | 模型 + GPU | `bash run_ao_pipeline.sh` |
 | 增强 Pipeline | 较长 | 模型 + GPU | `cd enhancement && python src/run_pipeline.py` |
 | 重新生成前端数据 | ~1 分钟 | 无需模型 | `cd webapp/scripts && python generate_data.py` |
 
@@ -486,10 +492,10 @@ npm run preview # 预览生产构建
 
 | 页面 | 功能 |
 |------|------|
-| **项目概览** | Pipeline 流程图、数据集统计、关键数字 |
-| **推荐工作台** | 用户交互历史 + LLM 推荐结果展示 |
-| **相似用户检索** | 候选用户池 + Top-K 检索可视化 |
-| **效果评测** | 核心指标、训练曲线、DG 基线对比、Recall@K & NDCG@K 曲线 |
+| **项目概览** | 核心成果卡片、双数据集概览(GM/AO)、方法概述 |
+| **方法流程** | Pipeline 7 阶段流程图、用户画像样例(真实属性)、跨域推荐示意 |
+| **推荐展示** | GM/AO 双数据集切换,用户交互历史 + LLM 推荐结果 + 相似用户参考(画像属性 Jaccard 相似度) |
+| **效果评测** | GM/AO 双数据集切换,核心指标、训练曲线(训练+验证损失)、DG 基线对比、HR@K & NDCG@K 曲线 |
 
 ### 数据源
 
@@ -690,8 +696,8 @@ URLLM-project/
 │   ├── src/
 │   │   ├── pages/                  # 4 个页面
 │   │   │   ├── Overview.tsx        # 项目概览
-│   │   │   ├── Workbench.tsx       # 推荐工作台
-│   │   │   ├── RetrievalView.tsx   # 相似用户检索
+│   │   │   ├── Method.tsx          # 方法流程
+│   │   │   ├── Workbench.tsx       # 推荐展示
 │   │   │   └── Dashboard.tsx       # 效果评测
 │   │   └── data/                   # 前端数据(JSON)
 │   └── scripts/generate_data.py    # 前端数据生成
@@ -717,6 +723,8 @@ URLLM-project/
 
 ## 关键评估指标参考
 
+### GM 数据集(Movie → Game)
+
 | 指标 | LLM+画像(Llama2-7B) | DG 基线 |
 |------|---------------------|---------|
 | HR@1 | 0.0147 | 0.0000 |
@@ -727,7 +735,18 @@ URLLM-project/
 | eval_loss | 0.4347 | — |
 | eval_accuracy | 0.8401 | — |
 
-> HR@K 采用物品 Jaccard 相似度扩展(URLLM 论文方法),K 值递增有区分度。
+### AO 数据集(Office → Art)
+
+| 指标 | LLM+画像(Llama2-7B) | DG 基线 |
+|------|---------------------|---------|
+| HR@1 | 0.0020 | 0.0000 |
+| HR@5 | 0.0030 | 0.0000 |
+| HR@10 | 0.0030 | 0.0000 |
+| HR@20 | 0.0040 | 0.0010 |
+| MRR | 0.0026 | 0.0003 |
+| eval_loss | 0.4266 | — |
+
+> HR@K 采用物品 Jaccard 相似度扩展(URLLM 论文方法),K 值递增有区分度。AO 数据集因物品池更大(16,000+ 候选)且物品标题含品牌/型号/尺寸,跨域推荐难度更高。
 
 ---
 
@@ -740,11 +759,13 @@ URLLM-project/
 5. **前端数据**:`webapp/src/data/` 为前端数据源,由 `generate_data.py` 从 enhancement 产物生成,均为真实项目数据
 6. **软链接**:`item_attributes_GM.json` 需软链到 `item_attributes.json`(评估脚本读取)
 7. **CUDA 版本**:PyTorch 版本必须匹配 CUDA 驱动版本(如 2.5.1+cu121 对应 CUDA 12.1)
-8. **大文件**:基座模型(26G)和 LoRA 权重(142M)不在 Git 仓库,需从 Release 或 ModelScope 下载
+8. **大文件**:基座模型(26G)、LoRA 权重(142M)和 DG 基线数据(GM .npy + AO .pt)不在 Git 仓库,需从 Release 或 ModelScope 下载
+9. **AO 数据集训练**:使用 FP16 混合精度(非 8bit QLoRA),通过 `run_train_ao.py` 包装脚本启动,解决 CUDA 沙箱限制
+10. **双数据集切换**:前端推荐展示和效果评测页面支持 GM/AO 数据集一键切换
 
 ---
 
-**项目状态**:Llama2-7B 完整流程已跑通,前端展示系统上线,评估指标真实且有区分度。
+**项目状态**:GM + AO 双数据集完整流程已跑通,前端展示系统上线(支持双数据集切换),评估指标真实且有区分度。
 
 **GitHub 仓库**:https://github.com/learner-aa/ProjectReproductionOfURLLM
 
