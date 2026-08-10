@@ -717,7 +717,6 @@ npm run dev -- --host 0.0.0.0 --port 6006
 | 文档 | 说明 |
 |------|------|
 | [PROJECT_REPORT.md](PROJECT_REPORT.md) | 完整项目报告(12 章，含环境、训练、评估、问题解决) |
-| [RUN_REPORT.md](RUN_REPORT.md) | 跑通报告(早期 Qwen2-1.5B 验证记录) |
 
 ---
 
