@@ -21,6 +21,7 @@ import numpy as np
 
 from data_utils import (
     PROCESSED_DIR,
+    DATASET_SUFFIX,
     cosine_similarity,
     load_dg_features,
     load_interactions,
@@ -137,7 +138,7 @@ class UserRetriever:
         if id_mapping is None:
             id_mapping = load_id_mapping()
         if item_metadata is None:
-            meta_path = PROCESSED_DIR / "item_metadata.json"
+            meta_path = PROCESSED_DIR / f"item_metadata{DATASET_SUFFIX}.json"
             if meta_path.exists():
                 from data_utils import load_json
                 item_metadata = load_json(meta_path)
@@ -443,9 +444,9 @@ def run_user_retrieval(config: Dict):
 
     # 加载数据划分
     from data_utils import load_json
-    train_data = load_json(PROCESSED_DIR / "train.json")
-    valid_data = load_json(PROCESSED_DIR / "valid.json")
-    test_data = load_json(PROCESSED_DIR / "test.json")
+    train_data = load_json(PROCESSED_DIR / f"train{DATASET_SUFFIX}.json")
+    valid_data = load_json(PROCESSED_DIR / f"valid{DATASET_SUFFIX}.json")
+    test_data = load_json(PROCESSED_DIR / f"test{DATASET_SUFFIX}.json")
 
     # 批量检索
     logger.info(f"训练集检索 (k={k_train}, 排除自身, 取 top-2)...")

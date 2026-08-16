@@ -107,18 +107,20 @@ def run_stage(stage: str, config: Dict):
 
     elif stage == "finetune":
         from llm_finetune import train
-        lora_cfg_path = PROJECT_ROOT / "config" / "lora_config.yaml"
+        lora_cfg_path = config.get("_lora_config_path",
+                                    str(PROJECT_ROOT / "config" / "lora_config.yaml"))
         lora_cfg = {}
-        if lora_cfg_path.exists():
+        if Path(lora_cfg_path).exists():
             with open(lora_cfg_path) as f:
                 lora_cfg = yaml.safe_load(f) or {}
         train(lora_cfg)
 
     elif stage == "inference":
         from llm_inference import run_inference
-        lora_cfg_path = PROJECT_ROOT / "config" / "lora_config.yaml"
+        lora_cfg_path = config.get("_lora_config_path",
+                                    str(PROJECT_ROOT / "config" / "lora_config.yaml"))
         lora_cfg = {}
-        if lora_cfg_path.exists():
+        if Path(lora_cfg_path).exists():
             with open(lora_cfg_path) as f:
                 lora_cfg = yaml.safe_load(f) or {}
         run_inference(config=lora_cfg)
@@ -180,6 +182,12 @@ def main():
         help="配置文件路径 (默认: config/pipeline_config.yaml)",
     )
     parser.add_argument(
+        "--lora-config",
+        type=str,
+        default=None,
+        help="LoRA 配置文件路径 (默认: config/lora_config.yaml)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="只打印将要执行的阶段，不实际运行",
@@ -206,6 +214,10 @@ def main():
 
     # 加载配置
     config = load_config(args.config)
+
+    # 设置 LoRA 配置路径 (用于 finetune/inference 阶段)
+    if args.lora_config:
+        config["_lora_config_path"] = args.lora_config
 
     # 确定要执行的阶段
     if args.stage:

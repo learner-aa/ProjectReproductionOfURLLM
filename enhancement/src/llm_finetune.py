@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
-from data_utils import OUTPUT_DIR, PROCESSED_DIR, ensure_dirs
+from data_utils import OUTPUT_DIR, PROCESSED_DIR, DATASET_SUFFIX, ensure_dirs
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +49,8 @@ DEFAULT_LORA_CONFIG = {
         "save_total_limit": 3,
     },
     "data": {
-        "train_file": "train_instructions.json",
-        "valid_file": "valid_instructions.json",
+        "train_file": f"train_instructions{DATASET_SUFFIX}.json",
+        "valid_file": f"valid_instructions{DATASET_SUFFIX}.json",
     },
 }
 
@@ -232,7 +232,7 @@ def train(config: Optional[Dict] = None):
     eval_dataset = SimpleDataset(valid_data) if valid_data else None
 
     # 训练参数
-    save_dir = str(OUTPUT_DIR / "lora_weights")
+    save_dir = str(OUTPUT_DIR / f"lora_weights{DATASET_SUFFIX}")
     training_args = TrainingArguments(
         output_dir=save_dir,
         num_train_epochs=training_config.get("num_epochs", 3),
@@ -277,7 +277,7 @@ def train(config: Optional[Dict] = None):
     trainer.train()
 
     # 保存最终模型
-    final_path = str(OUTPUT_DIR / "lora_weights" / "final")
+    final_path = str(OUTPUT_DIR / f"lora_weights{DATASET_SUFFIX}" / "final")
     trainer.save_model(final_path)
     tokenizer.save_pretrained(final_path)
 

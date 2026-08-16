@@ -1,0 +1,35 @@
+# ============================================================
+# URLLM 增强推荐 Pipeline 全局配置 (AO 数据集)
+# ============================================================
+
+# 数据集路径 (预处理阶段使用)
+data:
+  # 原始交互数据 (Amazon JSON Lines 格式)
+  review_x_path: "data/raw/Office_reviews.json"
+  review_y_path: "data/raw/Art_reviews.json"
+  # 物品元数据
+  meta_x_path: "data/raw/Office_meta.json"
+  meta_y_path: "data/raw/Art_meta.json"
+
+# 域定义
+domains:
+  x: "Office"
+  y: "Art"
+
+# 预处理配置
+preprocess:
+  min_interactions: 3          # 最少交互次数过滤
+  max_seq_len: 15              # 最大序列长度 (与 DG 模型一致)
+  random_seed: 2040            # 随机种子 (与 DG 模型一致)
+  domain_x_name: "Office"
+  domain_y_name: "Art"
+
+# 物品属性提取配置
+attribute_extraction:
+  backend: "convert"           # 使用已有的 item_attributes_AO.json
+  language: "en"
+
+# Instruction 数据构建配置
+instruction:
+  template_type: "profile"     # "base" | "profile" | "cot"
+  output_format: "alpaca"      # "alpaca" | "chatml"

@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from data_utils import (
-    OUTPUT_DIR, PROCESSED_DIR,
+    OUTPUT_DIR, PROCESSED_DIR, DATASET_SUFFIX,
     load_json, save_json,
     load_dg_scores, load_dg_candidates, load_dg_config,
 )
@@ -413,7 +413,7 @@ def run_evaluation(config: Optional[Dict] = None):
     logger.info("=" * 60)
 
     # 加载推理结果
-    pred_file = OUTPUT_DIR / "predictions" / "test_predictions.json"
+    pred_file = OUTPUT_DIR / "predictions" / f"test_predictions{DATASET_SUFFIX}.json"
     if not pred_file.exists():
         logger.error(f"推理结果不存在: {pred_file}")
         return
@@ -487,7 +487,7 @@ def run_evaluation(config: Optional[Dict] = None):
     refined_metrics = {}
     refined_fuzzy = {}
     expanded_metrics = {}
-    refined_file = OUTPUT_DIR / "refined_predictions" / "refined_predictions.json"
+    refined_file = OUTPUT_DIR / "refined_predictions" / f"refined_predictions{DATASET_SUFFIX}.json"
     if refined_file.exists():
         refined_results = load_json(refined_file)
         refined_preds = [r["prediction"] for r in refined_results]
@@ -564,7 +564,7 @@ def run_evaluation(config: Optional[Dict] = None):
     if uhr_metrics:
         eval_result["uhr"] = uhr_metrics
 
-    eval_file = str(OUTPUT_DIR / "eval_results" / "evaluation.json")
+    eval_file = str(OUTPUT_DIR / "eval_results" / f"evaluation{DATASET_SUFFIX}.json")
     save_json(eval_result, eval_file)
     logger.info(f"评估结果已保存: {eval_file}")
 

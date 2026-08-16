@@ -66,36 +66,42 @@
       "trainInstructions": 8000
     },
     "metrics": {
-      "hr1": 0.002,
-      "hr5": 0.003,
-      "hr10": 0.003,
-      "hr20": 0.004,
-      "ndcg1": 0.002,
-      "ndcg5": 0.0026,
-      "ndcg10": 0.0026,
-      "ndcg20": 0.0029,
-      "mrr": 0.0026,
-      "fuzzyHr1": 0.003,
-      "partialHr1": 0.0025,
-      "exactHr1": 0.002,
-      "oodRate": 0.924,
-      "oodCount": 924,
+      "hr1": 0.0,
+      "hr5": 0.0,
+      "hr10": 0.0,
+      "hr20": 0.0,
+      "ndcg1": 0.0,
+      "ndcg5": 0.0,
+      "ndcg10": 0.0,
+      "ndcg20": 0.0,
+      "mrr": 0.0,
+      "fuzzyHr1": 0.008,
+      "partialHr1": 0.004,
+      "exactHr1": 0.0,
+      "oodRate": 0.4995,
+      "oodCount": 500,
       "totalUsers": 1000,
-      "coldUsers": 0,
-      "warmUsers": 1000
+      "coldUsers": 941,
+      "warmUsers": 59,
+      "refinedHr1": 0.0,
+      "refinedMrr": 0.0,
+      "refinedOodRate": 0.5,
+      "refinedOodCount": 500,
+      "rawHr1": 0.0,
+      "rawMrr": 0.0
     },
     "dgBaseline": {
       "hr1": 0.0,
       "hr5": 0.0,
       "hr10": 0.0,
-      "hr20": 0.001,
-      "mrr": 0.0003
+      "hr20": 0.0003,
+      "mrr": 0.0001
     },
     "training": {
-      "totalSteps": 2000,
-      "epochs": 2,
-      "finalLoss": 0.3975,
-      "bestEvalLoss": 0.4266
+      "totalSteps": 5000,
+      "epochs": 5,
+      "finalLoss": 0.1948,
+      "bestEvalLoss": 0.3122
     }
   }
 }

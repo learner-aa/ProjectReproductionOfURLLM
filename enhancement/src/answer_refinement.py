@@ -23,6 +23,7 @@ import numpy as np
 from data_utils import (
     OUTPUT_DIR,
     PROCESSED_DIR,
+    DATASET_SUFFIX,
     load_dg_scores,
     load_dg_candidates,
     load_id_mapping,
@@ -295,7 +296,7 @@ def refine_predictions(
     fallback_enabled = ref_cfg.get("fallback_enabled", True)
 
     # 加载数据
-    pred_file = OUTPUT_DIR / "predictions" / "test_predictions.json"
+    pred_file = OUTPUT_DIR / "predictions" / f"test_predictions{DATASET_SUFFIX}.json"
     if not pred_file.exists():
         logger.error(f"推理结果不存在: {pred_file}")
         return []
@@ -372,7 +373,7 @@ def refine_predictions(
         refined_results.append(new_result)
 
     # 保存
-    output_file = OUTPUT_DIR / "refined_predictions" / "refined_predictions.json"
+    output_file = OUTPUT_DIR / "refined_predictions" / f"refined_predictions{DATASET_SUFFIX}.json"
     save_json(refined_results, output_file)
 
     # 统计

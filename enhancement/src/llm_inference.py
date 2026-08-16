@@ -17,7 +17,7 @@ from pathlib import Path
 import torch
 from typing import Any, Dict, List, Optional, Tuple
 
-from data_utils import OUTPUT_DIR, PROCESSED_DIR, load_json, save_json, ensure_dirs
+from data_utils import OUTPUT_DIR, PROCESSED_DIR, DATASET_SUFFIX, load_json, save_json, ensure_dirs
 
 logger = logging.getLogger(__name__)
 
@@ -243,9 +243,9 @@ def run_inference(
     ensure_dirs()
 
     if test_file is None:
-        test_file = str(PROCESSED_DIR / "test_instructions.json")
+        test_file = str(PROCESSED_DIR / f"test_instructions{DATASET_SUFFIX}.json")
     if lora_path is None:
-        lora_path = str(OUTPUT_DIR / "lora_weights" / "final")
+        lora_path = str(OUTPUT_DIR / f"lora_weights{DATASET_SUFFIX}" / "final")
 
     cfg = config or {}
     base_model = cfg.get("model", {}).get("base_model", "meta-llama/Llama-2-7b-chat-hf")
@@ -292,7 +292,7 @@ def run_inference(
         })
 
     # 保存
-    output_file = str(OUTPUT_DIR / "predictions" / "test_predictions.json")
+    output_file = str(OUTPUT_DIR / "predictions" / f"test_predictions{DATASET_SUFFIX}.json")
     save_json(results, output_file)
 
     # 统计

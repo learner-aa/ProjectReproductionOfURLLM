@@ -27,6 +27,9 @@ PROCESSED_DIR = DATA_DIR / "processed"
 RAW_DIR = DATA_DIR / "raw"
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 
+# 数据集后缀: 空=GM, _AO=AO 数据集 (通过环境变量 DATASET_SUFFIX 切换)
+DATASET_SUFFIX = os.environ.get("DATASET_SUFFIX", "")
+
 
 def ensure_dirs():
     """确保所有必要目录存在"""
@@ -54,10 +57,10 @@ def load_dg_features() -> Dict[str, np.ndarray]:
             - test_y_fea:  (num_test_users, 656) Y域用户特征
     """
     files = {
-        "train_x_fea": SAVED_MODELS_DIR / "DGGM_final_train_x_fea.npy",
-        "train_y_fea": SAVED_MODELS_DIR / "DGGM_final_train_y_fea.npy",
-        "test_x_fea": SAVED_MODELS_DIR / "DGGM_final_test_x_fea.npy",
-        "test_y_fea": SAVED_MODELS_DIR / "DGGM_final_test_y_fea.npy",
+        "train_x_fea": SAVED_MODELS_DIR / f"DG{('GM' if not DATASET_SUFFIX else 'AO')}_final_train_x_fea.npy",
+        "train_y_fea": SAVED_MODELS_DIR / f"DG{('GM' if not DATASET_SUFFIX else 'AO')}_final_train_y_fea.npy",
+        "test_x_fea": SAVED_MODELS_DIR / f"DG{('GM' if not DATASET_SUFFIX else 'AO')}_final_test_x_fea.npy",
+        "test_y_fea": SAVED_MODELS_DIR / f"DG{('GM' if not DATASET_SUFFIX else 'AO')}_final_test_y_fea.npy",
     }
     features = {}
     for key, path in files.items():
@@ -139,7 +142,7 @@ def load_interactions(path: Optional[Union[str, Path]] = None) -> Dict[str, List
         dict: {user_id: [item_id, ...]}
     """
     if path is None:
-        path = PROCESSED_DIR / "interactions.json"
+        path = PROCESSED_DIR / f"interactions{DATASET_SUFFIX}.json"
     return load_json(path)
 
 
@@ -155,7 +158,7 @@ def load_item_metadata(path: Optional[Union[str, Path]] = None) -> Dict[str, Dic
         dict: {item_id: metadata_dict}
     """
     if path is None:
-        path = PROCESSED_DIR / "item_metadata.json"
+        path = PROCESSED_DIR / f"item_metadata{DATASET_SUFFIX}.json"
     return load_json(path)
 
 
@@ -167,7 +170,7 @@ def load_item_attributes(path: Optional[Union[str, Path]] = None) -> Dict[str, D
         dict: {item_id: {"intro": str, "attributes": [str, ...]}}
     """
     if path is None:
-        path = PROCESSED_DIR / "item_attributes.json"
+        path = PROCESSED_DIR / f"item_attributes{DATASET_SUFFIX}.json"
     return load_json(path)
 
 
@@ -183,7 +186,7 @@ def load_id_mapping(path: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
             - domain_y_items: [item_ids in domain Y]
     """
     if path is None:
-        path = PROCESSED_DIR / "id_mapping.json"
+        path = PROCESSED_DIR / f"id_mapping{DATASET_SUFFIX}.json"
     return load_json(path)
 
 
@@ -235,7 +238,7 @@ def find_topk_similar(
 # 检索结果存取
 # ============================================================
 
-RETRIEVAL_PATH = PROCESSED_DIR / "retrieval_results.json"
+RETRIEVAL_PATH = PROCESSED_DIR / f"retrieval_results{DATASET_SUFFIX}.json"
 
 
 def save_retrieval_results(

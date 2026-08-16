@@ -10,7 +10,7 @@ import random
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from data_utils import PROCESSED_DIR, load_json, save_json
+from data_utils import PROCESSED_DIR, DATASET_SUFFIX, load_json, save_json
 from prompt_templates import (
     PROMPT_II_RECOMMEND_BASE,
     PROMPT_II_RECOMMEND_WITH_PROFILE,
@@ -275,18 +275,18 @@ def build_all_instruction_data(config: Dict):
     logger.info("=" * 60)
 
     # 加载数据
-    train_data = load_json(PROCESSED_DIR / "train.json")
-    valid_data = load_json(PROCESSED_DIR / "valid.json")
-    test_data = load_json(PROCESSED_DIR / "test.json")
-    item_metadata = load_json(PROCESSED_DIR / "item_metadata.json")
-    id_mapping = load_json(PROCESSED_DIR / "id_mapping.json")
+    train_data = load_json(PROCESSED_DIR / f"train{DATASET_SUFFIX}.json")
+    valid_data = load_json(PROCESSED_DIR / f"valid{DATASET_SUFFIX}.json")
+    test_data = load_json(PROCESSED_DIR / f"test{DATASET_SUFFIX}.json")
+    item_metadata = load_json(PROCESSED_DIR / f"item_metadata{DATASET_SUFFIX}.json")
+    id_mapping = load_json(PROCESSED_DIR / f"id_mapping{DATASET_SUFFIX}.json")
 
     # 用户画像 (可选)
-    profile_path = PROCESSED_DIR / "user_profiles.json"
+    profile_path = PROCESSED_DIR / f"user_profiles{DATASET_SUFFIX}.json"
     user_profiles = load_json(profile_path) if profile_path.exists() else {}
 
     # 物品属性 (可选)
-    attr_path = PROCESSED_DIR / "item_attributes.json"
+    attr_path = PROCESSED_DIR / f"item_attributes{DATASET_SUFFIX}.json"
     item_attributes = load_json(attr_path) if attr_path.exists() else {}
 
     # 配置
@@ -300,7 +300,7 @@ def build_all_instruction_data(config: Dict):
     # 检索结果 (可选，来自 knn_retriever 阶段)
     retrieval_results = {}
     retriever = None
-    retrieval_path = PROCESSED_DIR / "retrieval_results.json"
+    retrieval_path = PROCESSED_DIR / f"retrieval_results{DATASET_SUFFIX}.json"
     if retrieval_path.exists():
         retrieval_results = load_json(retrieval_path)
         logger.info(f"已加载检索结果: train={len(retrieval_results.get('train', {}))}, "
@@ -350,9 +350,9 @@ def build_all_instruction_data(config: Dict):
         test_inst = convert_to_chatml(test_inst)
 
     # 保存
-    save_json(train_inst, PROCESSED_DIR / "train_instructions.json")
-    save_json(valid_inst, PROCESSED_DIR / "valid_instructions.json")
-    save_json(test_inst, PROCESSED_DIR / "test_instructions.json")
+    save_json(train_inst, PROCESSED_DIR / f"train_instructions{DATASET_SUFFIX}.json")
+    save_json(valid_inst, PROCESSED_DIR / f"valid_instructions{DATASET_SUFFIX}.json")
+    save_json(test_inst, PROCESSED_DIR / f"test_instructions{DATASET_SUFFIX}.json")
 
     # 统计
     logger.info("=" * 60)
