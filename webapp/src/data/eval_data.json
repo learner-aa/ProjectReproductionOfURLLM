@@ -70,25 +70,28 @@
       "hr5": 0.0,
       "hr10": 0.0,
       "hr20": 0.0,
+      "mrr": 0.0,
       "ndcg1": 0.0,
       "ndcg5": 0.0,
       "ndcg10": 0.0,
       "ndcg20": 0.0,
-      "mrr": 0.0,
-      "fuzzyHr1": 0.008,
-      "partialHr1": 0.004,
+      "rawHr1": 0.0,
+      "rawMrr": 0.0,
+      "fuzzyHr1": 0.009,
+      "partialHr1": 0.0045,
       "exactHr1": 0.0,
       "oodRate": 0.4995,
-      "oodCount": 500,
+      "oodCount": 499.5,
       "totalUsers": 1000,
-      "coldUsers": 941,
-      "warmUsers": 59,
       "refinedHr1": 0.0,
+      "refinedHr5": 0.0,
+      "refinedHr10": 0.0,
+      "refinedHr20": 0.0,
       "refinedMrr": 0.0,
       "refinedOodRate": 0.5,
-      "refinedOodCount": 500,
-      "rawHr1": 0.0,
-      "rawMrr": 0.0
+      "refinedOodCount": 500.0,
+      "coldUsers": 941,
+      "warmUsers": 59
     },
     "dgBaseline": {
       "hr1": 0.0,
@@ -98,10 +101,30 @@
       "mrr": 0.0001
     },
     "training": {
-      "totalSteps": 5000,
-      "epochs": 5,
-      "finalLoss": 0.1948,
-      "bestEvalLoss": 0.3122
-    }
+      "epochs": 3,
+      "totalSteps": 3000,
+      "finalLoss": 0,
+      "bestEvalLoss": 0.355,
+      "bestStep": 3000,
+      "lr": "1e-4",
+      "batchSize": "1 × 8 (grad accum)",
+      "warmupRatio": 0.03,
+      "weightDecay": 0.01,
+      "maxSeqLength": 1024,
+      "loraR": 16,
+      "loraAlpha": 32,
+      "loraDropout": 0.05,
+      "loraTargetModules": [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj"
+      ],
+      "baseModel": "Llama2-7B-hf"
+    },
+    "description": "AO 数据集 (Office→Art) 3 epochs LoRA 微调结果。HR@1=0.0000, fuzzy_HR@1=0.0090, OOD=49.95%"
   }
 }

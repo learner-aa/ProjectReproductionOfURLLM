@@ -19,7 +19,7 @@ model:
 
 # 训练参数
 training:
-  num_epochs: 5                                  # 增强配置: 5 epochs
+  num_epochs: 3                                  # 最佳配置: 3 epochs (eval_loss 拐点, 避免过拟合)
   max_steps: -1
   batch_size: 1
   gradient_accumulation_steps: 8
@@ -32,7 +32,7 @@ training:
   logging_steps: 10
   save_steps: 500
   eval_steps: 500
-  save_total_limit: 3
+  save_total_limit: 5                            # 保留更多 checkpoint 防止丢失
   gradient_checkpointing: true
 
 # 数据路径 (AO 数据集)
