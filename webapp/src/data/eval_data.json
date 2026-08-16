@@ -103,7 +103,7 @@
     "training": {
       "epochs": 3,
       "totalSteps": 3000,
-      "finalLoss": 0,
+      "finalLoss": 0.2505,
       "bestEvalLoss": 0.355,
       "bestStep": 3000,
       "lr": "1e-4",
