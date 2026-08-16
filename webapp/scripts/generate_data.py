@@ -60,7 +60,7 @@ def jaccard(set_a, set_b):
 # ============================================================
 def gen_training_logs():
     print("[1] training_logs.json")
-    ts = load_json(ENH / "outputs/lora_weights/llama2_final/trainer_state.json")
+    ts = load_json(ENH / "outputs/lora_weights/checkpoint-19735/trainer_state.json")
     steps = []
     for entry in ts["log_history"]:
         if "loss" in entry:
@@ -81,19 +81,19 @@ def gen_training_logs():
         for entry in reversed(ts["log_history"]):
             if "eval_loss" in entry:
                 best_metric = entry["eval_loss"]
-                best_step = entry.get("step", ts.get("global_step", 7894))
+                best_step = entry.get("step", ts.get("global_step", 19730))
                 break
     if best_metric is None:
         best_metric = 0.0
     if best_step is None:
-        best_step = ts.get("global_step", 7894)
+        best_step = ts.get("global_step", 19730)
 
     out = {
         "steps": steps,
         "best_step": best_step,
         "best_eval_loss": round(best_metric, 4),
-        "total_steps": 7894,
-        "description": "LoRA 微调训练日志 (7894 steps / 2 epochs, 7 modules, train_loss=0.5255, eval_loss=0.4347)",
+        "total_steps": 19730,
+        "description": "LoRA 微调训练日志 (19730 steps / 5 epochs, 7 modules, final_loss=0.3914)",
     }
     save_json(out, DATA_DIR / "training_logs.json")
     save_json(out, SRC_DATA_DIR / "training_logs.json")
@@ -285,7 +285,7 @@ def gen_mockdata():
             "HR@20": round(dg.get("HR@20", 0), 4),
             "MRR": round(dg.get("MRR", 0), 4),
         },
-        "model_info": "LoRA 微调 (7894 steps / 2 epochs)",
+        "model_info": "LoRA 微调 (19730 steps / 5 epochs)",
     }
 
     # 加载 training_logs (供 Dashboard 展示训练曲线)

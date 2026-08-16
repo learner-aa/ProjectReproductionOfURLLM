@@ -99,6 +99,21 @@ Think step by step:
 Please output ONLY the recommended item title after "Output:".
 Output:"""
 
+PROMPT_II_RECOMMEND_WITH_RETRIEVAL = """Instruction: Given a list of items the user has interacted with, along with some similar users who have similar interaction histories, please recommend a new {target_domain} item that the user would likely enjoy.
+
+Input:
+=== Similar Users ===
+{retrieved_users_text}
+
+=== Target User Interaction History ===
+{interaction_sequence}
+
+=== Target User Profile ===
+{user_profile_text}
+
+Please recommend ONE specific {target_domain} item title.
+Output:"""
+
 
 # ============================================================
 # 用户画像文本模板
@@ -187,6 +202,7 @@ def get_prompt_template(template_name: str) -> str:
         "recommend_base": PROMPT_II_RECOMMEND_BASE,
         "recommend_profile": PROMPT_II_RECOMMEND_WITH_PROFILE,
         "recommend_cot": PROMPT_II_RECOMMEND_COT,
+        "recommend_retrieval": PROMPT_II_RECOMMEND_WITH_RETRIEVAL,
         "profile_compact": PROFILE_TEMPLATE_COMPACT,
         "profile_detailed": PROFILE_TEMPLATE_DETAILED,
     }

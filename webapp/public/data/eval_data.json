@@ -1,0 +1,101 @@
+{
+  "GM": {
+    "label": "影视 · 游戏",
+    "sourceDomain": "Movie",
+    "targetDomain": "Game",
+    "stats": {
+      "numUsers": 40479,
+      "testUsers": 3601,
+      "sourceItems": 57088,
+      "targetItems": 107792,
+      "sourceInteractions": 365293,
+      "targetInteractions": 329066,
+      "avgSeqLength": 17.15,
+      "trainInstructions": 31570
+    },
+    "metrics": {
+      "hr1": 0.0275,
+      "hr5": 0.0439,
+      "hr10": 0.0483,
+      "hr20": 0.0555,
+      "ndcg1": 0.0275,
+      "ndcg5": 0.0361,
+      "ndcg10": 0.0375,
+      "ndcg20": 0.0393,
+      "mrr": 0.0345,
+      "fuzzyHr1": 0.0192,
+      "partialHr1": 0.0258,
+      "exactHr1": 0.0178,
+      "oodRate": 0.0934,
+      "oodCount": 336,
+      "totalUsers": 3601,
+      "coldUsers": 0,
+      "warmUsers": 3601,
+      "refinedHr1": 0.0233,
+      "refinedMrr": 0.0233,
+      "refinedOodRate": 0.0342,
+      "refinedOodCount": 123,
+      "rawHr1": 0.0178,
+      "rawMrr": 0.0178
+    },
+    "dgBaseline": {
+      "hr1": 0.0,
+      "hr5": 0.0,
+      "hr10": 0.0,
+      "hr20": 0.0003,
+      "mrr": 0.0001
+    },
+    "training": {
+      "totalSteps": 19730,
+      "epochs": 5,
+      "finalLoss": 0.3914,
+      "bestEvalLoss": 0.5756
+    }
+  },
+  "AO": {
+    "label": "办公 · 艺术",
+    "sourceDomain": "Office",
+    "targetDomain": "Art",
+    "stats": {
+      "numUsers": 9577,
+      "testUsers": 1000,
+      "sourceItems": 18639,
+      "targetItems": 15242,
+      "totalInteractions": 198964,
+      "avgSeqLength": 20.78,
+      "trainInstructions": 8000
+    },
+    "metrics": {
+      "hr1": 0.002,
+      "hr5": 0.003,
+      "hr10": 0.003,
+      "hr20": 0.004,
+      "ndcg1": 0.002,
+      "ndcg5": 0.0026,
+      "ndcg10": 0.0026,
+      "ndcg20": 0.0029,
+      "mrr": 0.0026,
+      "fuzzyHr1": 0.003,
+      "partialHr1": 0.0025,
+      "exactHr1": 0.002,
+      "oodRate": 0.924,
+      "oodCount": 924,
+      "totalUsers": 1000,
+      "coldUsers": 0,
+      "warmUsers": 1000
+    },
+    "dgBaseline": {
+      "hr1": 0.0,
+      "hr5": 0.0,
+      "hr10": 0.0,
+      "hr20": 0.001,
+      "mrr": 0.0003
+    },
+    "training": {
+      "totalSteps": 2000,
+      "epochs": 2,
+      "finalLoss": 0.3975,
+      "bestEvalLoss": 0.4266
+    }
+  }
+}

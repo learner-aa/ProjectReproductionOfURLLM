@@ -1,9 +1,9 @@
 ---
-base_model: /root/autodl-tmp/models/models/Qwen--Qwen2-1.5B-Instruct/snapshots/master
+base_model: /root/autodl-tmp/URLLM-project/models/Llama-2-7b-hf/models/shakechen--Llama-2-7b-hf/snapshots/master
 library_name: peft
 pipeline_tag: text-generation
 tags:
-- base_model:adapter:/root/autodl-tmp/models/models/Qwen--Qwen2-1.5B-Instruct/snapshots/master
+- base_model:adapter:/root/autodl-tmp/URLLM-project/models/Llama-2-7b-hf/models/shakechen--Llama-2-7b-hf/snapshots/master
 - lora
 - transformers
 ---

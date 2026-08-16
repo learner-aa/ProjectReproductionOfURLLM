@@ -10,11 +10,12 @@ import random
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from data_utils import PROCESSED_DIR, load_json, save_json, get_processed_path
+from data_utils import PROCESSED_DIR, load_json, save_json
 from prompt_templates import (
     PROMPT_II_RECOMMEND_BASE,
     PROMPT_II_RECOMMEND_WITH_PROFILE,
     PROMPT_II_RECOMMEND_COT,
+    PROMPT_II_RECOMMEND_WITH_RETRIEVAL,
     format_interaction_sequence,
     format_attributes,
 )
@@ -36,6 +37,7 @@ def build_single_instruction(
     template_type: str = "profile",
     domain_x_name: str = "Entertainment",
     domain_y_name: str = "Education",
+    retrieved_users_text: Optional[str] = None,
 ) -> Dict[str, str]:
     """
     为单个用户构建一条 Instruction 数据。
@@ -47,9 +49,10 @@ def build_single_instruction(
         user_profile: 用户画像字典
         item_metadata: 物品元数据
         item_attributes: 物品属性
-        template_type: "base" | "profile" | "cot"
+        template_type: "base" | "profile" | "cot" | "retrieval"
         domain_x_name: X 域名称
         domain_y_name: Y 域名称
+        retrieved_users_text: 检索用户的 few-shot 文本 (论文 Prompt II)
 
     Returns:
         {"instruction": str, "input": str, "output": str}
@@ -96,7 +99,15 @@ def build_single_instruction(
         preferred_cats = "N/A"
 
     # 选择模板
-    if template_type == "base":
+    # 如果有检索用户文本，优先使用检索模板 (论文 Prompt II)
+    if retrieved_users_text or template_type == "retrieval":
+        instruction = PROMPT_II_RECOMMEND_WITH_RETRIEVAL.format(
+            target_domain=target_domain,
+            retrieved_users_text=retrieved_users_text or "(no similar users available)",
+            interaction_sequence=seq_text,
+            user_profile_text=profile_text,
+        )
+    elif template_type == "base":
         instruction = PROMPT_II_RECOMMEND_BASE.format(
             target_domain=target_domain,
             user_profile_text=profile_text,
@@ -136,6 +147,8 @@ def build_instruction_dataset(
     template_type: str = "profile",
     domain_x_name: str = "Entertainment",
     domain_y_name: str = "Education",
+    retrieval_map: Optional[Dict[str, List[str]]] = None,
+    retriever: Optional[Any] = None,
 ) -> List[Dict[str, str]]:
     """
     批量构建 Instruction 数据集。
@@ -146,15 +159,18 @@ def build_instruction_dataset(
         user_profiles: 用户画像
         item_metadata: 物品元数据
         item_attributes: 物品属性
-        template_type: "base" | "profile" | "cot"
+        template_type: "base" | "profile" | "cot" | "retrieval"
         domain_x_name: X 域名称
         domain_y_name: Y 域名称
+        retrieval_map: {user_id: [retrieved_user_id, ...]} 检索结果映射
+        retriever: UserRetriever 实例 (用于格式化检索用户文本)
 
     Returns:
         list of instruction dicts
     """
     instructions = []
     skipped = 0
+    retrieval_used = 0
 
     for user_id, data in split_data.items():
         seq = data.get("seq", [])
@@ -170,6 +186,16 @@ def build_instruction_dataset(
 
         profile = user_profiles.get(user_id, {})
 
+        # 获取检索用户文本
+        retrieved_text = None
+        if retrieval_map and retriever:
+            retrieved_ids = retrieval_map.get(user_id, [])
+            if retrieved_ids:
+                retrieved_text = retriever.get_retrieved_user_text(
+                    retrieved_ids, max_items_per_user=5
+                )
+                retrieval_used += 1
+
         try:
             inst = build_single_instruction(
                 user_id=user_id,
@@ -181,6 +207,7 @@ def build_instruction_dataset(
                 template_type=template_type,
                 domain_x_name=domain_x_name,
                 domain_y_name=domain_y_name,
+                retrieved_users_text=retrieved_text,
             )
             instructions.append(inst)
         except Exception as e:
@@ -189,6 +216,7 @@ def build_instruction_dataset(
 
     logger.info(
         f"Instruction 数据构建: {len(instructions)} 条, 跳过 {skipped} 条"
+        + (f", 含检索用户 {retrieval_used} 条" if retrieval_map else "")
     )
     return instructions
 
@@ -235,31 +263,30 @@ def convert_to_chatml(instructions: List[Dict]) -> List[Dict]:
 # 主流程
 # ============================================================
 
-def build_all_instruction_data(config: Dict, dataset: str = "GM"):
+def build_all_instruction_data(config: Dict):
     """
     构建全部 Instruction 数据集 (train/valid/test)。
 
     Args:
         config: pipeline 配置
-        dataset: "GM" 或 "AO"
     """
     logger.info("=" * 60)
-    logger.info(f"开始构建 Instruction 数据集 (dataset={dataset})")
+    logger.info("开始构建 Instruction 数据集")
     logger.info("=" * 60)
 
     # 加载数据
-    train_data = load_json(get_processed_path("train.json", dataset))
-    valid_data = load_json(get_processed_path("valid.json", dataset))
-    test_data = load_json(get_processed_path("test.json", dataset))
-    item_metadata = load_json(get_processed_path("item_metadata.json", dataset))
-    id_mapping = load_json(get_processed_path("id_mapping.json", dataset))
+    train_data = load_json(PROCESSED_DIR / "train.json")
+    valid_data = load_json(PROCESSED_DIR / "valid.json")
+    test_data = load_json(PROCESSED_DIR / "test.json")
+    item_metadata = load_json(PROCESSED_DIR / "item_metadata.json")
+    id_mapping = load_json(PROCESSED_DIR / "id_mapping.json")
 
     # 用户画像 (可选)
-    profile_path = get_processed_path("user_profiles.json", dataset)
+    profile_path = PROCESSED_DIR / "user_profiles.json"
     user_profiles = load_json(profile_path) if profile_path.exists() else {}
 
     # 物品属性 (可选)
-    attr_path = get_processed_path("item_attributes.json", dataset)
+    attr_path = PROCESSED_DIR / "item_attributes.json"
     item_attributes = load_json(attr_path) if attr_path.exists() else {}
 
     # 配置
@@ -270,23 +297,49 @@ def build_all_instruction_data(config: Dict, dataset: str = "GM"):
     domain_x = domain_cfg.get("x", "Entertainment")
     domain_y = domain_cfg.get("y", "Education")
 
+    # 检索结果 (可选，来自 knn_retriever 阶段)
+    retrieval_results = {}
+    retriever = None
+    retrieval_path = PROCESSED_DIR / "retrieval_results.json"
+    if retrieval_path.exists():
+        retrieval_results = load_json(retrieval_path)
+        logger.info(f"已加载检索结果: train={len(retrieval_results.get('train', {}))}, "
+                     f"valid={len(retrieval_results.get('valid', {}))}, "
+                     f"test={len(retrieval_results.get('test', {}))}")
+        # 初始化检索器用于格式化文本
+        try:
+            from knn_retriever import UserRetriever
+            retriever = UserRetriever(
+                domain_x_name=domain_x,
+                domain_y_name=domain_y,
+            )
+            logger.info("UserRetriever 已初始化 (用于格式化检索用户文本)")
+        except Exception as e:
+            logger.warning(f"无法初始化 UserRetriever: {e}, 检索文本将为空")
+
     # 构建各 split 的 instruction 数据
     logger.info("构建训练集 instructions...")
     train_inst = build_instruction_dataset(
         train_data, user_profiles, item_metadata, item_attributes,
         template_type, domain_x, domain_y,
+        retrieval_map=retrieval_results.get("train"),
+        retriever=retriever,
     )
 
     logger.info("构建验证集 instructions...")
     valid_inst = build_instruction_dataset(
         valid_data, user_profiles, item_metadata, item_attributes,
         template_type, domain_x, domain_y,
+        retrieval_map=retrieval_results.get("valid"),
+        retriever=retriever,
     )
 
     logger.info("构建测试集 instructions...")
     test_inst = build_instruction_dataset(
         test_data, user_profiles, item_metadata, item_attributes,
         template_type, domain_x, domain_y,
+        retrieval_map=retrieval_results.get("test"),
+        retriever=retriever,
     )
 
     # 格式转换
@@ -297,9 +350,9 @@ def build_all_instruction_data(config: Dict, dataset: str = "GM"):
         test_inst = convert_to_chatml(test_inst)
 
     # 保存
-    save_json(train_inst, get_processed_path("train_instructions.json", dataset))
-    save_json(valid_inst, get_processed_path("valid_instructions.json", dataset))
-    save_json(test_inst, get_processed_path("test_instructions.json", dataset))
+    save_json(train_inst, PROCESSED_DIR / "train_instructions.json")
+    save_json(valid_inst, PROCESSED_DIR / "valid_instructions.json")
+    save_json(test_inst, PROCESSED_DIR / "test_instructions.json")
 
     # 统计
     logger.info("=" * 60)
@@ -313,16 +366,12 @@ def build_all_instruction_data(config: Dict, dataset: str = "GM"):
 
 
 if __name__ == "__main__":
-    import argparse
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     import yaml
-    ap = argparse.ArgumentParser(description="构建 Instruction 数据集")
-    ap.add_argument("--dataset", choices=["GM", "AO"], default="GM", help="数据集 (默认 GM)")
-    args = ap.parse_args()
     config_path = Path(__file__).parent.parent / "config" / "pipeline_config.yaml"
     if config_path.exists():
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
-        build_all_instruction_data(cfg, dataset=args.dataset)
+        build_all_instruction_data(cfg)
     else:
-        build_all_instruction_data({}, dataset=args.dataset)
+        build_all_instruction_data({})

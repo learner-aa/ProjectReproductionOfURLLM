@@ -4,7 +4,7 @@
 
 # 基座模型
 model:
-  base_model: "/root/autodl-tmp/models/models/Qwen--Qwen2-1.5B-Instruct/snapshots/master"
+  base_model: "/root/autodl-tmp/URLLM-project/models/Llama-2-7b-hf/models/shakechen--Llama-2-7b-hf/snapshots/master"
   lora_r: 8                                      # LoRA rank
   lora_alpha: 16                                 # LoRA alpha (通常 2x rank)
   lora_dropout: 0.05

@@ -24,7 +24,6 @@ from data_utils import (
     OUTPUT_DIR, PROCESSED_DIR,
     load_json, save_json,
     load_dg_scores, load_dg_candidates, load_dg_config,
-    get_processed_path, get_dataset_suffix,
 )
 
 logger = logging.getLogger(__name__)
@@ -107,169 +106,6 @@ def compute_all_metrics(
         metrics[f"HR@{k}"] = hit_rate_at_k(predictions, targets, k)
         metrics[f"NDCG@{k}"] = ndcg_at_k(predictions, targets, k)
     metrics["MRR"] = mean_reciprocal_rank(predictions, targets)
-    return metrics
-
-
-# ============================================================
-# 物品属性 Jaccard 相似度扩展 (URLLM 论文核心方法)
-# ============================================================
-
-def build_attribute_index(item_attributes: Dict) -> Tuple[Dict, Dict]:
-    """
-    构建属性倒排索引和物品属性字典。
-
-    Returns:
-        item_id_to_attrs: {item_id: set(attributes)}
-        attr_to_items: {attribute: set(item_ids)}
-    """
-    item_id_to_attrs = {}
-    attr_to_items = defaultdict(set)
-    for item_id, info in item_attributes.items():
-        attrs = set(info.get("attributes", []))
-        item_id_to_attrs[item_id] = attrs
-        for attr in attrs:
-            attr_to_items[attr].add(item_id)
-    return item_id_to_attrs, attr_to_items
-
-
-def jaccard_similarity(set1: set, set2: set) -> float:
-    """计算 Jaccard 相似度"""
-    if not set1 and not set2:
-        return 0.0
-    intersection = len(set1 & set2)
-    union = len(set1 | set2)
-    return intersection / union if union > 0 else 0.0
-
-
-def find_item_id_by_title(title: str, title_to_id: Dict) -> Optional[str]:
-    """通过标题查找物品 ID（精确匹配 + 大小写不敏感匹配）"""
-    if not title:
-        return None
-    title_clean = title.strip()
-    # 精确匹配
-    if title_clean in title_to_id:
-        return title_to_id[title_clean]
-    # 大小写不敏感匹配
-    title_lower = title_clean.lower()
-    for t, iid in title_to_id.items():
-        if t.lower() == title_lower:
-            return iid
-    return None
-
-
-def expand_to_topk(
-    seed_item_id: str,
-    item_id_to_attrs: Dict[str, set],
-    attr_to_items: Dict[str, set],
-    k: int = 20,
-) -> List[str]:
-    """
-    使用 Jaccard 相似度将种子物品扩展为 top-K 候选列表。
-
-    使用倒排索引加速：只计算与种子物品有共同属性的物品的相似度。
-
-    Args:
-        seed_item_id: 种子物品 ID
-        item_id_to_attrs: 物品 ID 到属性集合的映射
-        attr_to_items: 属性到物品集合的倒排索引
-        k: 返回的候选数量
-
-    Returns:
-        top-K 相似物品 ID 列表（按相似度降序排列）
-    """
-    if seed_item_id not in item_id_to_attrs:
-        return [seed_item_id] if seed_item_id else []
-
-    seed_attrs = item_id_to_attrs[seed_item_id]
-    if not seed_attrs:
-        return [seed_item_id]
-
-    # 使用倒排索引找到候选物品（有共同属性的物品）
-    candidate_items = set()
-    for attr in seed_attrs:
-        candidate_items.update(attr_to_items.get(attr, set()))
-    candidate_items.discard(seed_item_id)
-
-    # 限制候选数量，避免 OOM（最多 2000 个候选）
-    if len(candidate_items) > 2000:
-        candidate_items = set(list(candidate_items)[:2000])
-
-    # 计算 Jaccard 相似度并排序
-    similarities = []
-    for cand_id in candidate_items:
-        cand_attrs = item_id_to_attrs.get(cand_id, set())
-        sim = jaccard_similarity(seed_attrs, cand_attrs)
-        similarities.append((cand_id, sim))
-
-    # 按相似度降序排列，取 top-K
-    similarities.sort(key=lambda x: x[1], reverse=True)
-    top_k_ids = [item_id for item_id, _ in similarities[:k]]
-
-    # 种子物品放在第一位
-    return [seed_item_id] + top_k_ids
-
-
-def compute_expanded_metrics(
-    predictions: List[str],
-    targets: List[str],
-    target_item_ids: List[str],
-    title_to_id: Dict[str, str],
-    item_id_to_attrs: Dict[str, set],
-    attr_to_items: Dict[str, set],
-    k_values: List[int] = [1, 5, 10, 20],
-) -> Dict[str, float]:
-    """
-    使用物品相似度扩展计算 HR@K, NDCG@K, MRR。
-
-    对于每个预测：
-    1. 将预测文本匹配到物品 ID
-    2. 使用 Jaccard 相似度扩展为 top-K 候选列表
-    3. 检查 target_item_id 是否在 top-K 中
-    """
-    metrics = {}
-
-    # 为每个预测生成 top-K 候选列表
-    expanded_lists = []
-    match_count = 0
-    import gc
-    for i, (pred, target_id) in enumerate(zip(predictions, target_item_ids)):
-        seed_id = find_item_id_by_title(pred, title_to_id)
-        if seed_id:
-            match_count += 1
-            topk = expand_to_topk(seed_id, item_id_to_attrs, attr_to_items, k=max(k_values))
-        else:
-            # 如果无法匹配到物品 ID，只使用预测本身
-            topk = [pred]
-        expanded_lists.append((topk, target_id))
-        if (i + 1) % 500 == 0:
-            logger.info(f"  扩展进度: {i+1}/{len(predictions)}")
-            gc.collect()
-
-    logger.info(f"预测匹配到物品 ID 的数量: {match_count}/{len(predictions)} ({match_count*100/len(predictions):.1f}%)")
-
-    for k in k_values:
-        hits = 0
-        ndcg_sum = 0.0
-        mrr_sum = 0.0
-
-        for topk, target_id in expanded_lists:
-            # 检查 target_id 是否在 top-K 中
-            found_rank = None
-            for rank, item_id in enumerate(topk[:k], 1):
-                if str(item_id) == str(target_id):
-                    found_rank = rank
-                    break
-
-            if found_rank is not None:
-                hits += 1
-                ndcg_sum += 1.0 / np.log2(found_rank + 1)
-                mrr_sum += 1.0 / found_rank
-
-        n = len(predictions)
-        metrics[f"HR@{k}"] = hits / n if n > 0 else 0.0
-        metrics[f"NDCG@{k}"] = ndcg_sum / n if n > 0 else 0.0
-
-    metrics["MRR"] = mrr_sum / len(predictions) if predictions else 0.0
     return metrics
 
 
@@ -398,7 +234,6 @@ def evaluate_dg_baseline(
     test_data: Dict[str, Dict],
     id_mapping: Dict[str, Any],
     k_values: List[int] = [1, 5, 10, 20],
-    dataset: str = "GM",
 ) -> Dict[str, float]:
     """
     从 DG 模型的评分矩阵计算基线指标。
@@ -407,13 +242,12 @@ def evaluate_dg_baseline(
         test_data: 测试集数据
         id_mapping: ID 映射表
         k_values: K 值列表
-        dataset: "GM" 或 "AO"
 
     Returns:
         指标字典
     """
     try:
-        scores = load_dg_scores(dataset=dataset)
+        scores = load_dg_scores()
     except FileNotFoundError:
         logger.warning("DG 评分矩阵不存在，跳过基线评估")
         return {}
@@ -421,8 +255,10 @@ def evaluate_dg_baseline(
     item_to_idx = id_mapping.get("item_id_to_index", {})
     user_ids = list(test_data.keys())
 
-    metrics = {f"HR@{k}": 0.0 for k in k_values}
-    metrics.update({f"NDCG@{k}": 0.0 for k in k_values})
+    metrics = {}
+    for k in k_values:
+        metrics[f"HR@{k}"] = 0.0
+        metrics[f"NDCG@{k}"] = 0.0
     metrics["MRR"] = 0.0
     valid_count = 0
 
@@ -464,7 +300,7 @@ def evaluate_dg_baseline(
 def compute_out_of_domain_rate(
     predictions: List[str],
     target_domains: List[str],
-    title_to_domain: Dict[str, str],
+    item_metadata: Dict[str, Dict],
 ) -> Dict[str, float]:
     """
     统计 LLM 生成的域外推荐比例。
@@ -472,11 +308,18 @@ def compute_out_of_domain_rate(
     Args:
         predictions: LLM 预测的物品标题
         target_domains: 每个样本的目标域
-        title_to_domain: 预构建的 标题(小写) → 域 映射
+        item_metadata: 物品元数据 (含 domain 信息)
 
     Returns:
         {"ood_rate": float, "ood_count": int, "total": int}
     """
+    # 构建标题 → 域的映射
+    title_to_domain = {}
+    for item_id, meta in item_metadata.items():
+        title = meta.get("title", "").lower().strip()
+        if title:
+            title_to_domain[title] = meta.get("domain", "Unknown")
+
     ood_count = 0
     total = len(predictions)
 
@@ -498,38 +341,107 @@ def compute_out_of_domain_rate(
 
 
 # ============================================================
+# User Hit Rate (UHR) — 论文 Table 6
+# ============================================================
+
+def compute_uhr(
+    retrieval_results: Dict[str, Dict[str, List[str]]],
+    test_data: Dict[str, Dict],
+    interactions: Dict[str, List[str]],
+    top_k_list: List[int] = [1, 3, 5],
+) -> Dict[str, float]:
+    """
+    计算 User Hit Rate (UHR): 检索到的相似用户中有多少
+    在训练集中与目标物品有过交互。
+
+    论文 Table 6 中用 UHR 衡量检索质量:
+    UHR@k = (命中目标物品的检索用户数) / (总检索用户数)
+
+    Args:
+        retrieval_results: {"test": {user_id: [retrieved_user_ids]}}
+        test_data: {user_id: {"target": {"item_id": str}}}
+        interactions: {user_id: [item_id, ...]}
+        top_k_list: 计算的 k 值列表
+
+    Returns:
+        {"UHR@1": float, "UHR@3": float, "UHR@5": float}
+    """
+    test_retrieval = retrieval_results.get("test", {})
+    metrics = {}
+
+    for k in top_k_list:
+        hits = 0
+        total = 0
+
+        for user_id, data in test_data.items():
+            retrieved = test_retrieval.get(user_id, [])[:k]
+            if not retrieved:
+                continue
+
+            target_item = data.get("target", {}).get("item_id", "")
+            if not target_item:
+                continue
+
+            total += 1
+
+            # 检查检索用户是否交互过目标物品
+            for r_uid in retrieved:
+                r_items = interactions.get(r_uid, [])
+                if target_item in r_items:
+                    hits += 1
+                    break
+
+        metrics[f"UHR@{k}"] = hits / total if total > 0 else 0.0
+
+    metrics["evaluated_users"] = total if top_k_list else 0
+    return metrics
+
+
+# ============================================================
 # 主评估流程
 # ============================================================
 
-def run_evaluation(config: Optional[Dict] = None, dataset: str = "GM"):
+def run_evaluation(config: Optional[Dict] = None):
     """
     执行完整评估流程。
 
     Args:
         config: 配置字典
-        dataset: "GM" 或 "AO"
     """
     logger.info("=" * 60)
-    logger.info(f"开始评估 (dataset={dataset})")
+    logger.info("开始评估")
     logger.info("=" * 60)
 
     # 加载推理结果
-    suffix = get_dataset_suffix(dataset)
-    pred_file = OUTPUT_DIR / "predictions" / f"test_predictions{suffix}.json"
+    pred_file = OUTPUT_DIR / "predictions" / "test_predictions.json"
     if not pred_file.exists():
         logger.error(f"推理结果不存在: {pred_file}")
         return
 
     results = load_json(pred_file)
 
-    # 清理预测结果中的 tokenizer 特殊标记 (</s>, <s>, etc.)
-    for r in results:
-        if r.get("prediction"):
-            r["prediction"] = r["prediction"].replace("</s>", "").replace("<s>", "").strip()
+    # 加载辅助数据
+    interactions = {}
+    inter_path = PROCESSED_DIR / "interactions.json"
+    if inter_path.exists():
+        interactions = load_json(inter_path)
 
-    import gc
+    item_metadata = {}
+    meta_path = PROCESSED_DIR / "item_metadata.json"
+    if meta_path.exists():
+        item_metadata = load_json(meta_path)
 
-    # 1. 精确匹配评估 (无需大文件，先算以降低峰值内存)
+    id_mapping = {}
+    map_path = PROCESSED_DIR / "id_mapping.json"
+    if map_path.exists():
+        id_mapping = load_json(map_path)
+
+    test_data = {}
+    test_path = PROCESSED_DIR / "test.json"
+    if test_path.exists():
+        test_data = load_json(test_path)
+
+    # 1. 精确匹配评估
     predictions = [r["prediction"] for r in results]
     targets = [r["ground_truth"] for r in results]
     exact_metrics = compute_all_metrics(predictions, targets)
@@ -537,76 +449,15 @@ def run_evaluation(config: Optional[Dict] = None, dataset: str = "GM"):
     for k, v in exact_metrics.items():
         logger.info(f"  {k}: {v:.4f}")
 
-    # 2. 模糊匹配评估 (无需大文件)
+    # 2. 模糊匹配评估
     fuzzy_metrics = compute_fuzzy_metrics(predictions, targets)
     logger.info("模糊匹配指标:")
     for k, v in fuzzy_metrics.items():
         logger.info(f"  {k}: {v:.4f}")
 
-    # 3. 加载 item_metadata，提取 title_to_id / title_to_domain 后立即释放
-    title_to_id = {}
-    title_to_domain = {}
-    meta_path = get_processed_path("item_metadata.json", dataset)
-    if meta_path.exists():
-        item_metadata = load_json(meta_path)
-        for iid, info in item_metadata.items():
-            if iid == "idBefore":
-                continue
-            title = info.get("title", "")
-            if title:
-                title_to_id[title] = iid
-                title_to_domain[title.lower().strip()] = info.get("domain", "Unknown")
-        del item_metadata
-        gc.collect()
-        logger.info(f"item_metadata 已提取映射 (title_to_id={len(title_to_id)})")
-
-    # 4. 加载 item_attributes，构建属性索引后立即释放
-    item_id_to_attrs, attr_to_items = {}, defaultdict(set)
-    attr_path = get_processed_path("item_attributes.json", dataset)
-    if attr_path.exists():
-        item_attributes = load_json(attr_path)
-        item_id_to_attrs, attr_to_items = build_attribute_index(item_attributes)
-        del item_attributes
-        gc.collect()
-        logger.info(f"item_attributes 已构建索引 (items={len(item_id_to_attrs)})")
-
-    # 5. 物品相似度扩展评估 (URLLM 论文核心方法)
-    expanded_metrics = {}
-    if item_id_to_attrs and title_to_id:
-        target_item_ids = []
-        test_instructions_path = get_processed_path("test_instructions.json", dataset)
-        if test_instructions_path.exists():
-            test_items = load_json(test_instructions_path)
-            user_to_target = {}
-            for item in test_items:
-                uid = item.get("user_id")
-                tid = item.get("target_item_id")
-                if uid and tid:
-                    user_to_target[uid] = str(tid)
-            del test_items
-            gc.collect()
-            for r in results:
-                uid = r.get("user_id")
-                target_item_ids.append(user_to_target.get(uid, ""))
-        else:
-            target_item_ids = [""] * len(results)
-
-        expanded_metrics = compute_expanded_metrics(
-            predictions, targets, target_item_ids,
-            title_to_id, item_id_to_attrs, attr_to_items,
-        )
-        logger.info("物品相似度扩展指标:")
-        for k, v in expanded_metrics.items():
-            logger.info(f"  {k}: {v:.4f}")
-
-    # 6. 冷/热启动分析 (加载 interactions，用完即释放)
-    cold_warm = None
-    inter_path = get_processed_path("interactions.json", dataset)
-    if inter_path.exists():
-        interactions = load_json(inter_path)
+    # 3. 冷/热启动分析
+    if interactions:
         cold_warm = analyze_cold_warm_start(results, interactions)
-        del interactions
-        gc.collect()
         logger.info("冷启动指标:")
         for k, v in cold_warm["cold"].items():
             logger.info(f"  cold_{k}: {v:.4f}")
@@ -616,54 +467,134 @@ def run_evaluation(config: Optional[Dict] = None, dataset: str = "GM"):
         logger.info(f"  冷启动用户: {cold_warm['stats']['cold_users']}")
         logger.info(f"  热启动用户: {cold_warm['stats']['warm_users']}")
 
-    # 7. 域外率 (用预构建的 title_to_domain，无需原始 item_metadata)
-    ood = None
-    if title_to_domain:
+    # 4. 域外率
+    if item_metadata:
         target_domains = [r.get("target_domain", "") for r in results]
-        ood = compute_out_of_domain_rate(predictions, target_domains, title_to_domain)
+        ood = compute_out_of_domain_rate(predictions, target_domains, item_metadata)
         logger.info(f"域外率: {ood['ood_rate']:.2%} ({ood['ood_count']:.0f}/{ood['total']})")
 
-    # 8. DG 基线对比 (加载 test_data + id_mapping，用完即释放)
+    # 5. DG 基线对比
     dg_metrics = {}
-    test_path = get_processed_path("test.json", dataset)
-    map_path = get_processed_path("id_mapping.json", dataset)
-    if test_path.exists() and map_path.exists():
-        test_data = load_json(test_path)
-        id_mapping = load_json(map_path)
-        if test_data and id_mapping:
-            dg_metrics = evaluate_dg_baseline(test_data, id_mapping, dataset=dataset)
-            del test_data, id_mapping
-            gc.collect()
-            if dg_metrics:
-                logger.info("DG 基线指标:")
-                for k, v in dg_metrics.items():
-                    if isinstance(v, float):
-                        logger.info(f"  DG_{k}: {v:.4f}")
+    if test_data and id_mapping:
+        dg_metrics = evaluate_dg_baseline(test_data, id_mapping)
+        if dg_metrics:
+            logger.info("DG 基线指标:")
+            for k, v in dg_metrics.items():
+                if isinstance(v, float):
+                    logger.info(f"  DG_{k}: {v:.4f}")
+
+    # 6. Refined predictions 评估 (Answer Refinement 后)
+    refined_metrics = {}
+    refined_fuzzy = {}
+    expanded_metrics = {}
+    refined_file = OUTPUT_DIR / "refined_predictions" / "refined_predictions.json"
+    if refined_file.exists():
+        refined_results = load_json(refined_file)
+        refined_preds = [r["prediction"] for r in refined_results]
+        refined_targets = [r["ground_truth"] for r in refined_results]
+        refined_metrics = compute_all_metrics(refined_preds, refined_targets)
+        refined_fuzzy = compute_fuzzy_metrics(refined_preds, refined_targets)
+        logger.info("精炼后 (Refined) 精确匹配指标:")
+        for k, v in refined_metrics.items():
+            logger.info(f"  Refined_{k}: {v:.4f}")
+        logger.info("精炼后 (Refined) 模糊匹配指标:")
+        for k, v in refined_fuzzy.items():
+            logger.info(f"  Refined_{k}: {v:.4f}")
+
+        # 6.5 Top-K 候选评估 (使用 refine_answers 的 BM25 top-20 候选)
+        if any("top_k_candidates" in r for r in refined_results):
+            topk_preds = []
+            for r in refined_results:
+                candidates = r.get("top_k_candidates", [])
+                if candidates:
+                    topk_preds.append(candidates)
+                else:
+                    topk_preds.append([r["prediction"]])
+            expanded_metrics = compute_all_metrics(topk_preds, refined_targets)
+            logger.info("Top-K 候选评估指标 (BM25 top-20):")
+            for k, v in expanded_metrics.items():
+                logger.info(f"  TopK_{k}: {v:.4f}")
+        else:
+            logger.warning("refined_predictions 中无 top_k_candidates, 跳过 top-K 评估")
+
+        # 精炼后域外率
+        if item_metadata:
+            refined_domains = [r.get("target_domain", "") for r in refined_results]
+            refined_ood = compute_out_of_domain_rate(
+                refined_preds, refined_domains, item_metadata
+            )
+            logger.info(
+                f"精炼后域外率: {refined_ood['ood_rate']:.2%} "
+                f"({refined_ood['ood_count']:.0f}/{refined_ood['total']})"
+            )
+        else:
+            refined_ood = {}
+    else:
+        refined_ood = {}
+
+    # 7. UHR (User Hit Rate)
+    uhr_metrics = {}
+    retrieval_path = PROCESSED_DIR / "retrieval_results.json"
+    if retrieval_path.exists() and test_data and interactions:
+        retrieval_results = load_json(retrieval_path)
+        uhr_metrics = compute_uhr(retrieval_results, test_data, interactions)
+        logger.info("User Hit Rate (检索质量):")
+        for k, v in uhr_metrics.items():
+            if isinstance(v, float):
+                logger.info(f"  {k}: {v:.4f}")
 
     # 保存评估结果
     eval_result = {
         "exact_metrics": exact_metrics,
         "fuzzy_metrics": fuzzy_metrics,
-        "expanded_metrics": expanded_metrics,
     }
-    if cold_warm:
+    if interactions:
         eval_result["cold_warm"] = cold_warm
-    if ood:
+    if item_metadata:
         eval_result["out_of_domain"] = ood
     if dg_metrics:
         eval_result["dg_baseline"] = dg_metrics
+    if refined_metrics:
+        eval_result["refined_metrics"] = refined_metrics
+        eval_result["refined_fuzzy"] = refined_fuzzy
+        if refined_ood:
+            eval_result["refined_ood"] = refined_ood
+    if expanded_metrics:
+        eval_result["expanded_metrics"] = expanded_metrics
+    if uhr_metrics:
+        eval_result["uhr"] = uhr_metrics
 
-    eval_file = str(OUTPUT_DIR / "eval_results" / f"evaluation{suffix}.json")
+    eval_file = str(OUTPUT_DIR / "eval_results" / "evaluation.json")
     save_json(eval_result, eval_file)
     logger.info(f"评估结果已保存: {eval_file}")
 
-    # 6. 对比表
+    # 8. 对比表
     logger.info("=" * 60)
     logger.info("对比表:")
-    logger.info(f"{'方法':<20} {'HR@1':>8} {'HR@5':>8} {'HR@10':>8} {'MRR':>8}")
-    logger.info(f"{'LLM+画像':<20} {exact_metrics.get('HR@1', 0):>8.4f} {exact_metrics.get('HR@5', 0):>8.4f} {exact_metrics.get('HR@10', 0):>8.4f} {exact_metrics.get('MRR', 0):>8.4f}")
+    logger.info(f"{'方法':<25} {'HR@1':>8} {'HR@5':>8} {'HR@10':>8} {'MRR':>8}")
+    logger.info(
+        f"{'LLM (原始)':<25} "
+        f"{exact_metrics.get('HR@1', 0):>8.4f} "
+        f"{exact_metrics.get('HR@5', 0):>8.4f} "
+        f"{exact_metrics.get('HR@10', 0):>8.4f} "
+        f"{exact_metrics.get('MRR', 0):>8.4f}"
+    )
+    if refined_metrics:
+        logger.info(
+            f"{'LLM+Refinement':<25} "
+            f"{refined_metrics.get('HR@1', 0):>8.4f} "
+            f"{refined_metrics.get('HR@5', 0):>8.4f} "
+            f"{refined_metrics.get('HR@10', 0):>8.4f} "
+            f"{refined_metrics.get('MRR', 0):>8.4f}"
+        )
     if dg_metrics:
-        logger.info(f"{'DG基线':<20} {dg_metrics.get('HR@1', 0):>8.4f} {dg_metrics.get('HR@5', 0):>8.4f} {dg_metrics.get('HR@10', 0):>8.4f} {dg_metrics.get('MRR', 0):>8.4f}")
+        logger.info(
+            f"{'DG基线':<25} "
+            f"{dg_metrics.get('HR@1', 0):>8.4f} "
+            f"{dg_metrics.get('HR@5', 0):>8.4f} "
+            f"{dg_metrics.get('HR@10', 0):>8.4f} "
+            f"{dg_metrics.get('MRR', 0):>8.4f}"
+        )
     logger.info("=" * 60)
 
 
@@ -672,9 +603,5 @@ def run_evaluation(config: Optional[Dict] = None, dataset: str = "GM"):
 # ============================================================
 
 if __name__ == "__main__":
-    import argparse
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    ap = argparse.ArgumentParser(description="评估推荐结果")
-    ap.add_argument("--dataset", choices=["GM", "AO"], default="GM", help="数据集 (默认 GM)")
-    args = ap.parse_args()
-    run_evaluation(dataset=args.dataset)
+    run_evaluation()

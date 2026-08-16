@@ -3,7 +3,7 @@
   "alpha_pattern": {},
   "arrow_config": null,
   "auto_mapping": null,
-  "base_model_name_or_path": "/root/autodl-tmp/models/models/Qwen--Qwen2-1.5B-Instruct/snapshots/master",
+  "base_model_name_or_path": "/root/autodl-tmp/URLLM-project/models/Llama-2-7b-hf/models/shakechen--Llama-2-7b-hf/snapshots/master",
   "bias": "none",
   "corda_config": null,
   "ensure_weight_tying": false,
@@ -31,13 +31,13 @@
   "rank_pattern": {},
   "revision": null,
   "target_modules": [
-    "up_proj",
-    "down_proj",
-    "gate_proj",
-    "v_proj",
-    "o_proj",
     "q_proj",
-    "k_proj"
+    "k_proj",
+    "o_proj",
+    "up_proj",
+    "v_proj",
+    "down_proj",
+    "gate_proj"
   ],
   "target_parameters": null,
   "task_type": "CAUSAL_LM",

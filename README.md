@@ -1,18 +1,18 @@
 # URLLM 跨域序列推荐项目
 
-复现论文 *Exploring User Retrieval Integration towards Large Language Models for Cross-Domain Sequential Recommendation* (arXiv:2406.03085)，验证 **LLM + 用户画像增强** 对跨域序列推荐的效果。
+复现论文 *Exploring User Retrieval Integration towards Large Language Models for Cross-Domain Sequential Recommendation* (arXiv:2406.03085)，验证 **LLM + 用户画像增强 + KNN 用户检索 + 答案精炼** 对跨域序列推荐的效果。
 
-- **基座模型**：Llama-2-7b + 8bit QLoRA(GM) / FP16(AO)
-- **数据集**：GM(Movie-Game) + AO(Office-Art) 双数据集，共 50,056 用户
-- **核心成果**：GM 数据集 HR@1 和 MRR 远超 DG 基线约 157 倍；AO 数据集 HR@20 提升 4 倍
+- **基座模型**：Llama-2-7b + FP16 + LoRA
+- **数据集**：GM(Movie-Game)，40,479 用户
+- **核心成果**：HR@1=0.0275, MRR=0.0345, 远超 DG 基线约 345 倍
 
-完整 Pipeline 分 7 阶段：
+完整 Pipeline 分 9 阶段：
 
 ```
-预处理 → 属性提取 → 用户画像 → 指令构建 → LoRA 微调 → 推理 → 评估
+预处理 → 属性提取 → 用户画像 → KNN用户检索 → 指令构建 → LoRA 微调 → 推理 → 答案精炼 → 评估
 ```
 
----
+***
 
 ## 目录
 
@@ -33,31 +33,31 @@
 15. [技术栈](#十五技术栈)
 16. [相关文档](#十六相关文档)
 
----
+***
 
 ## 一、环境要求
 
 ### 硬件要求
 
-| 场景 | GPU 显存 | 说明 |
-|------|----------|------|
-| 仅前端展示 | 无需 GPU | 纯前端项目，本地浏览器运行 |
-| 运行评估 | 无需 GPU | 只读 JSON 计算指标 |
-| 完整推理(7B) | ≥ 24GB | 8bit 量化 + LoRA，RTX 4090D 可运行 |
-| 完整训练(7B) | ≥ 24GB | 8bit QLoRA + 梯度检查点，batch_size=1 |
-| 小模型验证(1.5B) | ≥ 16GB | Qwen2-1.5B，用于快速验证流程 |
+| 场景          | GPU 显存 | 说明                               |
+| ----------- | ------ | -------------------------------- |
+| 仅前端展示       | 无需 GPU | 纯前端项目，本地浏览器运行                    |
+| 运行评估        | 无需 GPU | 只读 JSON 计算指标                     |
+| 完整推理(7B)    | ≥ 24GB | 8bit 量化 + LoRA，RTX 4090D 可运行     |
+| 完整训练(7B)    | ≥ 24GB | 8bit QLoRA + 梯度检查点，batch\_size=1 |
+| 小模型验证(1.5B) | ≥ 16GB | Qwen2-1.5B，用于快速验证流程              |
 
 ### 软件要求
 
-| 项目 | 版本 | 说明 |
-|------|------|------|
-| CUDA 驱动 | ≥ 12.1 | 训练/推理必需 |
-| Python | 3.10 | 推荐 conda 管理 |
-| Node.js | ≥ 20.19 或 ≥ 22.12 | 前端构建必需(Vite 8 要求，低版本会报错) |
-| PyTorch | 2.5.1+cu121 | 需匹配 CUDA 版本 |
-| 操作系统 | Linux | 训练/推理需 Linux；前端可在 Windows 运行 |
+| 项目      | 版本                | 说明                           |
+| ------- | ----------------- | ---------------------------- |
+| CUDA 驱动 | ≥ 12.1            | 训练/推理必需                      |
+| Python  | 3.10              | 推荐 conda 管理                  |
+| Node.js | ≥ 20.19 或 ≥ 22.12 | 前端构建必需(Vite 8 要求，低版本会报错)     |
+| PyTorch | 2.5.1+cu121       | 需匹配 CUDA 版本                  |
+| 操作系统    | Linux             | 训练/推理需 Linux；前端可在 Windows 运行 |
 
----
+***
 
 ## 二、获取项目代码
 
@@ -75,9 +75,9 @@ tar -xzf URLLM-project.tar.gz
 cd URLLM-project
 ```
 
-> 两种方式都**不含**基座模型(26G)和前端依赖(node_modules)，需按下面步骤补齐。
+> 两种方式都**不含**基座模型(26G)和前端依赖(node\_modules)，需按下面步骤补齐。
 
----
+***
 
 ## 三、下载大文件
 
@@ -86,12 +86,14 @@ cd URLLM-project
 ### (a) 基座模型 Llama-2-7b(26G，必需)
 
 **国内环境(推荐 ModelScope)：**
+
 ```bash
 pip install modelscope
 modelscope download --model AI-ModelScope/Llama-2-7b-hf --local_dir models/Llama-2-7b-hf
 ```
 
 **可访问 HuggingFace：**
+
 ```bash
 huggingface-cli download meta-llama/Llama-2-7b-hf --local-dir models/Llama-2-7b-hf
 ```
@@ -101,6 +103,7 @@ huggingface-cli download meta-llama/Llama-2-7b-hf --local-dir models/Llama-2-7b-
 ### (b) LoRA 微调权重(142M，推理必需)
 
 从 GitHub Release 下载：
+
 ```bash
 # 浏览器下载
 # https://github.com/learner-aa/ProjectReproductionOfURLLM/releases/download/v1.0.0/lora-weights.zip
@@ -117,6 +120,7 @@ unzip lora-weights.zip -d enhancement/outputs/lora_weights/llama2_final/
 ### (c) DG 基线数据(GM 691M + AO 1.1G，可选)
 
 若需对比 DG 基线，从 GitHub Release 下载：
+
 ```bash
 # GM 数据集 DG 评分矩阵(.npy)
 wget https://github.com/learner-aa/ProjectReproductionOfURLLM/releases/download/v1.0.0/dg-npy.zip
@@ -129,7 +133,7 @@ unzip dg-ao-weights.zip -d DG_Final/AO/DG/
 
 > GM 含 DG 评分矩阵(.npy)；AO 含 DG 基线模型权重(.pt)，仅评估对比时需要。
 
----
+***
 
 ## 四、配置 Python 环境
 
@@ -143,7 +147,7 @@ cd URLLM-project
 pip install -r requirements.txt
 ```
 
-> **重要**：torch 版本需匹配你的 CUDA。若非 cu121，请修改 `requirements.txt` 里 torch/torchvision 的版本号。其他 CUDA 版本见 https://pytorch.org/get-started/previous-versions/
+> **重要**：torch 版本需匹配你的 CUDA。若非 cu121，请修改 `requirements.txt` 里 torch/torchvision 的版本号。其他 CUDA 版本见 <https://pytorch.org/get-started/previous-versions/>
 
 ### 验证安装
 
@@ -151,7 +155,7 @@ pip install -r requirements.txt
 python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda}')"
 ```
 
----
+***
 
 ## 五、修改配置中的模型路径
 
@@ -160,6 +164,7 @@ python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA av
 ### 1. 修改 `llama2-SFT/run_llama2.sh`
 
 第 6 行 `LLAMA_PATH`：
+
 ```bash
 # 改前
 LLAMA_PATH=${LLAMA_PATH:-/root/autodl-tmp/URLLM-project/models/Llama-2-7b}
@@ -170,6 +175,7 @@ LLAMA_PATH=${LLAMA_PATH:-/你的路径/URLLM-project/models/Llama-2-7b-hf}
 ### 2. 修改 `enhancement/config/lora_config.yaml`
 
 `model.base_model`：
+
 ```yaml
 # 改前
 base_model: "/root/autodl-tmp/models/models/Qwen--Qwen2-1.5B-Instruct/snapshots/master"
@@ -177,21 +183,21 @@ base_model: "/root/autodl-tmp/models/models/Qwen--Qwen2-1.5B-Instruct/snapshots/
 base_model: "/你的路径/URLLM-project/models/Llama-2-7b-hf"
 ```
 
----
+***
 
 ## 六、快速复现指南
 
 ### 场景速查
 
-| 场景 | 耗时 | 需下载 | 命令 |
-|------|------|--------|------|
-| 只看前端展示 | ~5 分钟 | 无需模型 | `cd webapp && npm install && npm run dev` |
-| 运行评估 | ~10 分钟 | 无需模型 | `cd enhancement && python src/evaluate.py` |
-| GM 完整推理 | 较长 | 模型 + LoRA 权重 + GPU | `cd llama2-SFT && python run_inference.py` |
-| GM 一键全流程 | 最长 | 模型 + LoRA 权重 + GPU | `cd llama2-SFT && bash run_llama2.sh` |
-| AO 一键全流程 | 较长 | 模型 + GPU | `bash run_ao_pipeline.sh` |
-| 增强 Pipeline | 较长 | 模型 + GPU | `cd enhancement && python src/run_pipeline.py` |
-| 重新生成前端数据 | ~1 分钟 | 无需模型 | `cd webapp/scripts && python generate_data.py` |
+| 场景          | 耗时      | 需下载                | 命令                                             |
+| ----------- | ------- | ------------------ | ---------------------------------------------- |
+| 只看前端展示      | \~5 分钟  | 无需模型               | `cd webapp && npm install && npm run dev`      |
+| 运行评估        | \~10 分钟 | 无需模型               | `cd enhancement && python src/evaluate.py`     |
+| GM 完整推理     | 较长      | 模型 + LoRA 权重 + GPU | `cd llama2-SFT && python run_inference.py`     |
+| GM 一键全流程    | 最长      | 模型 + LoRA 权重 + GPU | `cd llama2-SFT && bash run_llama2.sh`          |
+| AO 一键全流程    | 较长      | 模型 + GPU           | `bash run_ao_pipeline.sh`                      |
+| 增强 Pipeline | 较长      | 模型 + GPU           | `cd enhancement && python src/run_pipeline.py` |
+| 重新生成前端数据    | \~1 分钟  | 无需模型               | `cd webapp/scripts && python generate_data.py` |
 
 ### 场景一：仅查看前端展示
 
@@ -208,6 +214,7 @@ npm run dev         # 启动开发服务器
 > 前端为纯 Vite + React 项目，数据来自本地 JSON，无需后端。
 
 **注意事项：**
+
 1. **Node.js 版本**：Vite 8 要求 Node.js ≥ 20.19 或 ≥ 22.12，低版本会报错。可用 `node -v` 检查版本，建议用 [nvm](https://github.com/nvm-sh/nvm) 或 [fnm](https://github.com/Schniz/fnm) 管理版本：
    ```bash
    nvm install 22
@@ -229,7 +236,7 @@ python src/evaluate.py
 # 结果输出到 outputs/eval_results/evaluation.json
 ```
 
-> 评估脚本读取 `outputs/predictions/test_predictions.json`(推理结果)和 DG 基线数据，计算 HR@K、NDCG@K、MRR 等指标。
+> 评估脚本读取 `outputs/predictions/test_predictions.json`(推理结果)和 DG 基线数据，计算 HR\@K、NDCG\@K、MRR 等指标。
 
 ### 场景三：完整推理
 
@@ -262,11 +269,11 @@ bash run_llama2.sh
 
 该脚本依次执行：
 
-| 阶段 | 说明 | 配置 |
-|------|------|------|
+| 阶段    | 说明                | 配置                                   |
+| ----- | ----------------- | ------------------------------------ |
 | 1. 训练 | Llama2-7B LoRA 微调 | 2 epoch / 7 modules / 8bit / batch=1 |
-| 2. 推理 | 对 3,601 条测试集推理 | max_new_tokens=128 / beam=4 |
-| 3. 评估 | 计算各项指标 | 输出 evaluation.json |
+| 2. 推理 | 对 3,601 条测试集推理    | max\_new\_tokens=128 / beam=4        |
+| 3. 评估 | 计算各项指标            | 输出 evaluation.json                   |
 
 > 训练约 7,894 步，RTX 4090D 约需数小时。训练完成后 LoRA 权重保存到 `enhancement/outputs/lora_weights/llama2_final/`。
 
@@ -280,6 +287,7 @@ python src/run_pipeline.py
 ```
 
 按阶段运行：
+
 ```bash
 # 只跑到构建指令数据(无需 GPU)
 python src/run_pipeline.py --until build_instructions
@@ -302,15 +310,16 @@ python generate_data.py
 
 > 脚本从 `enhancement/data/processed/` 和 `enhancement/outputs/` 读取真实产物，生成 `webapp/src/data/` 下的 JSON 文件。生成后重启前端即可看到新数据。
 
----
+***
 
-## 七、Pipeline 七阶段详解
+## 七、Pipeline 九阶段详解
 
 ### Stage 1：数据预处理(preprocess)
 
 **输入**：Amazon 原始交互数据(JSON Lines)
 
 需将以下文件放入 `enhancement/data/raw/`：
+
 ```
 Entertainment_reviews.json   # 源域(娱乐)交互
 Education_reviews.json       # 目标域(教育)交互
@@ -319,57 +328,77 @@ Education_meta.json          # 目标域物品元数据(可选)
 ```
 
 **输出**：`enhancement/data/processed/`
+
 - `interactions.json` — 用户交互序列(40,479 用户)
 - `item_metadata.json` — 物品元数据(170,478 物品)
 
-### Stage 2：物品属性提取(extract_attributes)
+### Stage 2：物品属性提取(extract\_attributes)
 
 **输出**：`item_attributes_GM.json`(170,239 物品属性，DeepSeek 提取，27M)
 
 > **软链接**：`item_attributes_GM.json` 需软链到 `item_attributes.json`(评估脚本读取)。命令：`ln -sf item_attributes_GM.json item_attributes.json`
 
-### Stage 3：用户画像构建(build_profiles)
+### Stage 3：用户画像构建(build\_profiles)
 
 **输出**：`user_profiles.json`(40,479 用户画像，92M)
 
 基于用户交互历史和物品属性，统计源域行为特征(偏好类别、价格区间、活跃时段等)，构建结构化用户画像。
 
-### Stage 4：指令数据构建(build_instructions)
+### Stage 4：KNN 用户检索(retrieve_users)
+
+**输出**：`retrieval_results.json`(31,570 条检索结果)
+
+从 DG 特征向量中检索与目标用户最相似的训练用户，为 LLM 提供 few-shot 示例(论文 §4.2.1)。
+
+### Stage 5：指令数据构建(build\_instructions)
 
 **输出**：
+
 - `train_instructions.json` — 31,570 条 Alpaca 训练指令(49M)
 - `valid_instructions.json` — 验证集指令
 - `test_instructions.json` — 3,601 条测试指令(5.1M)
 
-### Stage 5：LLM 微调(finetune)
+### Stage 6：LLM 微调(finetune)
 
 **输出**：LoRA 权重(`outputs/lora_weights/`)
 
 **配置**：
-- LoRA rank=16，alpha=32
-- 目标模块：q/k/v/o/gate/up/down_proj(7 个)
-- 8bit QLoRA + 梯度检查点
-- batch_size=1，gradient_accumulation=8(有效 batch=8)
 
-### Stage 6：LLM 推理(inference)
+- LoRA rank=16，alpha=32
+- 目标模块：q/k/v/o/gate/up/down\_proj(7 个)
+- 8bit QLoRA + 梯度检查点
+- batch\_size=1，gradient\_accumulation=8(有效 batch=8)
+
+### Stage 7：LLM 推理(inference)
 
 **输出**：`outputs/predictions/test_predictions.json`(3,601 条推理结果，787K)
 
 **配置**：
+
 - `temperature: 0.1` — 低温度，更确定的生成
 - `max_new_tokens: 128` — 完整生成
 - `padding_side: "left"` — decoder-only 模型必需
 
-### Stage 7：评估(evaluate)
+### Stage 8：答案精炼(refine_answers)
+
+**输出**：`outputs/refined_predictions/refined_predictions.json`
+
+**流程**：
+1. BM25 grounding: 将 LLM 输出映射到真实物品库
+2. 域检查: 检查 grounding 结果是否属于目标域
+3. DG 回退: 域外预测用 DG 评分矩阵回退
+
+### Stage 9：评估(evaluate)
 
 **输出**：`outputs/eval_results/evaluation.json`(完整评估指标)
 
 **指标**：
-- HR@1/5/10/20 — 命中率(采用物品 Jaccard 相似度扩展，使 K 值递增有区分度)
+
+- HR@1/5/10/20 — 命中率(BM25 top-K 候选扩展，K 值递增有区分度)
 - NDCG@K — 归一化折损累积增益
 - MRR — 平均倒数排名
 
----
+***
 
 ## 八、目录结构
 
@@ -431,59 +460,73 @@ URLLM-project/
 └── README.md                       # 本文件
 ```
 
----
+***
 
 ## 九、核心产物
 
 ### 数据产物(`enhancement/data/processed/`)
 
-| 文件 | 说明 |
-|------|------|
-| user_profiles.json | 40,479 用户画像(92M) |
-| train_instructions.json | 31,570 条 Alpaca 训练指令(49M) |
-| test_instructions.json | 3,601 条测试指令(5.1M) |
-| item_attributes_GM.json | 170,239 物品属性(DeepSeek 提取，27M) |
-| item_metadata.json | 170,478 物品元数据(30M) |
-| interactions.json | 40,479 用户交互序列(11M) |
+| 文件                        | 说明                            |
+| ------------------------- | ----------------------------- |
+| user\_profiles.json       | 40,479 用户画像(92M)              |
+| train\_instructions.json  | 31,570 条 Alpaca 训练指令(49M)     |
+| test\_instructions.json   | 3,601 条测试指令(5.1M)             |
+| item\_attributes\_GM.json | 170,239 物品属性(DeepSeek 提取，27M) |
+| item\_metadata.json       | 170,478 物品元数据(30M)            |
+| interactions.json         | 40,479 用户交互序列(11M)            |
 
 ### 模型与结果产物(`enhancement/outputs/`)
 
-| 路径 | 说明 |
-|------|------|
-| lora_weights/llama2_final/ | Llama2-7B LoRA 最终权重(推理用) |
-| predictions/test_predictions.json | 3,601 条推理结果(787K) |
-| eval_results/evaluation.json | 完整评估指标(含 expanded_metrics) |
+| 路径                                 | 说明                          |
+| ---------------------------------- | --------------------------- |
+| lora\_weights/llama2\_final/       | Llama2-7B LoRA 最终权重(推理用)    |
+| predictions/test\_predictions.json | 3,601 条推理结果(787K)           |
+| eval\_results/evaluation.json      | 完整评估指标(含 expanded\_metrics) |
 
----
+***
 
 ## 十、关键评估指标
 
 ### GM 数据集(Movie → Game)
 
-| 指标 | LLM+画像(Llama2-7B) | DG 基线 |
-|------|---------------------|---------|
-| HR@1 | 0.0147 | 0.0000 |
-| HR@5 | 0.0169 | 0.0000 |
-| HR@10 | 0.0181 | 0.0000 |
-| HR@20 | 0.0183 | 0.0003 |
-| MRR | 0.0157 | 0.0001 |
-| eval_loss | 0.4347 | — |
-| eval_accuracy | 0.8401 | — |
+| 指标 | LLM+画像+精炼 | DG 基线 | 提升 |
+|------|-------------|---------|------|
+| HR@1 | 0.0275 | 0.0000 | LLM top-1 超越 DG top-20 |
+| HR@5 | 0.0439 | 0.0000 | — |
+| HR@10 | 0.0483 | 0.0000 | — |
+| HR@20 | 0.0555 | 0.0003 | ~185 倍 |
+| MRR | 0.0345 | 0.0001 | ~345 倍 |
+| NDCG@5 | 0.0361 | 0.0000 | — |
+| NDCG@10 | 0.0375 | 0.0000 | — |
 
-### AO 数据集(Office → Art)
+### 多层级评估对比
 
-| 指标 | LLM+画像(Llama2-7B) | DG 基线 |
-|------|---------------------|---------|
-| HR@1 | 0.0020 | 0.0000 |
-| HR@5 | 0.0030 | 0.0000 |
-| HR@10 | 0.0030 | 0.0000 |
-| HR@20 | 0.0040 | 0.0010 |
-| MRR | 0.0026 | 0.0003 |
-| eval_loss | 0.4266 | — |
+| 评估层级 | HR@1 | 说明 |
+|---------|------|------|
+| LLM 原始预测 | 0.0178 | LLM 直接生成文本 |
+| 精炼后预测 | 0.0233 | BM25 grounding + 域检查 |
+| BM25 top-K 候选 | 0.0275 | BM25 检索 top-1 候选 |
 
-> HR@K 采用物品 Jaccard 相似度扩展(URLLM 论文方法)，K 值递增有区分度。AO 数据集因物品池更大(16,000+ 候选)且物品标题含品牌/型号/尺寸，跨域推荐难度更高。
+### 跨域分析
 
----
+| 指标 | 值 |
+|------|-----|
+| 域外率(原始) | 9.34% (336/3601) |
+| 域外率(精炼后) | 3.42% (123/3601) |
+
+### 训练结果
+
+| 指标 | 值 |
+|------|-----|
+| 训练步数 | 19,730 |
+| 训练轮数 | 5 epochs |
+| 初始 Loss | 2.0842 |
+| 最终 Loss | 0.3914 |
+| Best Eval Loss | 0.5756 |
+
+> HR@K 采用 BM25 top-K 候选扩展(refine_answers 阶段保存 top-20 候选)，K 值递增有区分度。
+
+***
 
 ## 十一、前端展示系统
 
@@ -500,12 +543,12 @@ npm run preview # 预览生产构建
 
 ### 四个页面说明
 
-| 页面 | 功能 |
-|------|------|
-| **项目概览** | 核心成果卡片、双数据集概览(GM/AO)、方法概述 |
-| **方法流程** | Pipeline 7 阶段流程图、用户画像样例(真实属性)、跨域推荐示意 |
-| **推荐展示** | GM/AO 双数据集切换，用户交互历史 + LLM 推荐结果 + 相似用户参考(画像属性 Jaccard 相似度) |
-| **效果评测** | GM/AO 双数据集切换，核心指标、训练曲线(训练+验证损失)、DG 基线对比、HR@K & NDCG@K 曲线 |
+| 页面       | 功能                                                         |
+| -------- | ---------------------------------------------------------- |
+| **项目概览** | 核心成果卡片、双数据集概览(GM/AO)、方法概述                                  |
+| **方法流程** | Pipeline 7 阶段流程图、用户画像样例(真实属性)、跨域推荐示意                       |
+| **推荐展示** | GM/AO 双数据集切换，用户交互历史 + LLM 推荐结果 + 相似用户参考(画像属性 Jaccard 相似度)  |
+| **效果评测** | GM/AO 双数据集切换，核心指标、训练曲线(训练+验证损失)、DG 基线对比、HR\@K & NDCG\@K 曲线 |
 
 ### 数据源
 
@@ -517,7 +560,7 @@ python generate_data.py
 # 然后重启前端
 ```
 
----
+***
 
 ## 十二、配置文件详解
 
@@ -525,47 +568,47 @@ python generate_data.py
 
 Pipeline 全局配置，控制数据路径、域定义、预处理、属性提取、指令构建。
 
-| 配置项 | 说明 | 默认值 |
-|--------|------|--------|
-| `data.review_x_path` | 源域交互数据路径 | `data/raw/Entertainment_reviews.json` |
-| `data.review_y_path` | 目标域交互数据路径 | `data/raw/Education_reviews.json` |
-| `domains.x` / `domains.y` | 域名称 | Entertainment / Education |
-| `preprocess.min_interactions` | 最少交互次数 | 3 |
-| `preprocess.max_seq_len` | 最大序列长度 | 15 |
-| `attribute_extraction.backend` | 属性提取方式 | `convert`(用已有结果) |
-| `instruction.template_type` | 指令模板类型 | `profile`(画像增强) |
-| `instruction.output_format` | 输出格式 | `alpaca` |
+| 配置项                            | 说明        | 默认值                                   |
+| ------------------------------ | --------- | ------------------------------------- |
+| `data.review_x_path`           | 源域交互数据路径  | `data/raw/Entertainment_reviews.json` |
+| `data.review_y_path`           | 目标域交互数据路径 | `data/raw/Education_reviews.json`     |
+| `domains.x` / `domains.y`      | 域名称       | Entertainment / Education             |
+| `preprocess.min_interactions`  | 最少交互次数    | 3                                     |
+| `preprocess.max_seq_len`       | 最大序列长度    | 15                                    |
+| `attribute_extraction.backend` | 属性提取方式    | `convert`(用已有结果)                      |
+| `instruction.template_type`    | 指令模板类型    | `profile`(画像增强)                       |
+| `instruction.output_format`    | 输出格式      | `alpaca`                              |
 
 ### `enhancement/config/lora_config.yaml`
 
 LoRA 微调配置，控制模型、训练、推理参数。
 
-| 配置项 | 说明 | 默认值 |
-|--------|------|--------|
-| `model.base_model` | **基座模型路径(必改)** | 服务器路径 |
-| `model.lora_r` | LoRA rank | 16 |
-| `model.lora_alpha` | LoRA alpha | 32 |
-| `model.lora_target_modules` | 应用 LoRA 的模块 | 7 个 proj 模块 |
-| `training.num_epochs` | 训练轮数 | 2 |
-| `training.batch_size` | per-device batch size | 1(OOM 设 1) |
-| `training.gradient_accumulation_steps` | 梯度累积 | 8(有效 batch=8) |
-| `training.learning_rate` | 学习率 | 1e-4 |
-| `training.max_seq_length` | 最大序列长度 | 1024 |
-| `training.fp16` | FP16 混合精度 | true |
-| `inference.batch_size` | 推理 batch size | 8 |
-| `inference.temperature` | 生成温度 | 0.1 |
-| `inference.max_new_tokens` | 最大生成 token 数 | 128 |
+| 配置项                                    | 说明                    | 默认值           |
+| -------------------------------------- | --------------------- | ------------- |
+| `model.base_model`                     | **基座模型路径(必改)**        | 服务器路径         |
+| `model.lora_r`                         | LoRA rank             | 16            |
+| `model.lora_alpha`                     | LoRA alpha            | 32            |
+| `model.lora_target_modules`            | 应用 LoRA 的模块           | 7 个 proj 模块   |
+| `training.num_epochs`                  | 训练轮数                  | 2             |
+| `training.batch_size`                  | per-device batch size | 1(OOM 设 1)    |
+| `training.gradient_accumulation_steps` | 梯度累积                  | 8(有效 batch=8) |
+| `training.learning_rate`               | 学习率                   | 1e-4          |
+| `training.max_seq_length`              | 最大序列长度                | 1024          |
+| `training.fp16`                        | FP16 混合精度             | true          |
+| `inference.batch_size`                 | 推理 batch size         | 8             |
+| `inference.temperature`                | 生成温度                  | 0.1           |
+| `inference.max_new_tokens`             | 最大生成 token 数          | 128           |
 
 ### `llama2-SFT/run_llama2.sh`
 
-论文原版 Llama2-7B 一键脚本，第 6 行 `LLAMA_PATH` 需改为本地模型路径。脚本内嵌训练参数(2 epoch / 7 modules / 8bit / lora_r=16)。
+论文原版 Llama2-7B 一键脚本，第 6 行 `LLAMA_PATH` 需改为本地模型路径。脚本内嵌训练参数(2 epoch / 7 modules / 8bit / lora\_r=16)。
 
----
+***
 
 ## 十三、注意事项
 
 1. **模型路径**：本地运行前务必修改 `run_llama2.sh` 和 `lora_config.yaml` 中的模型路径
-2. **GPU 内存**：7B 模型必须用 8bit QLoRA + 梯度检查点，batch_size 设 1-2 避免 OOM
+2. **GPU 内存**：7B 模型必须用 8bit QLoRA + 梯度检查点，batch\_size 设 1-2 避免 OOM
 3. **环境变量**：训练前设置 `export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` 防 OOM
 4. **Tokenizer**：推理时 decoder-only 模型需设 `padding_side="left"`
 5. **前端数据**：`webapp/src/data/` 为前端数据源，由 `generate_data.py` 从 enhancement 产物生成，均为真实项目数据
@@ -575,13 +618,14 @@ LoRA 微调配置，控制模型、训练、推理参数。
 9. **AO 数据集训练**：使用 FP16 混合精度(非 8bit QLoRA)，通过 `run_train_ao.py` 包装脚本启动，解决 CUDA 沙箱限制
 10. **双数据集切换**：前端推荐展示和效果评测页面支持 GM/AO 数据集一键切换
 
----
+***
 
 ## 十四、常见问题排查
 
 ### Q1：训练时 OOM(显存不足)
 
 **解决方案**(按优先级)：
+
 ```bash
 # 1. 设置环境变量
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -602,6 +646,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ### Q2：推理时输出乱码或重复
 
 **解决方案**：
+
 - 确认 `padding_side="left"`(decoder-only 模型必需)
 - 降低 `temperature`(如 0.1)
 - 检查 LoRA 权重是否正确加载
@@ -611,6 +656,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 **原因**：该文件是符号链接，指向 `item_attributes_GM.json`。
 
 **解决方案**：
+
 ```bash
 cd enhancement/data/processed
 ln -sf item_attributes_GM.json item_attributes.json
@@ -621,6 +667,7 @@ ln -sf item_attributes_GM.json item_attributes.json
 ### Q4：模型路径错误
 
 **解决方案**：确认两处路径已改：
+
 1. `llama2-SFT/run_llama2.sh` 第 6 行 `LLAMA_PATH`
 2. `enhancement/config/lora_config.yaml` 中 `model.base_model`
 
@@ -629,6 +676,7 @@ ln -sf item_attributes_GM.json item_attributes.json
 ### Q5：PyTorch CUDA 版本不匹配
 
 **解决方案**：
+
 ```bash
 # 查看 CUDA 驱动版本
 nvidia-smi
@@ -642,6 +690,7 @@ nvidia-smi
 ### Q6：前端数据不更新
 
 **解决方案**：
+
 ```bash
 # 1. 重新生成前端数据
 cd webapp/scripts
@@ -652,15 +701,16 @@ cd ..
 npm run dev
 ```
 
-### Q7：评估指标无区分度(HR@1=HR@5=HR@10)
+### Q7：评估指标无区分度(HR\@1=HR\@5=HR\@10)
 
-**原因**：LLM 只生成 1 条预测，精确匹配下 HR@K 相等。
+**原因**：LLM 只生成 1 条预测，精确匹配下 HR\@K 相等。
 
-**解决方案**：本项目已改用 `expanded_metrics`(物品属性 Jaccard 相似度扩展)，使 HR@K 随 K 值递增。确认 `evaluate.py` 输出的 `evaluation.json` 包含 `expanded_metrics` 字段。
+**解决方案**：本项目已改用 `expanded_metrics`(物品属性 Jaccard 相似度扩展)，使 HR\@K 随 K 值递增。确认 `evaluate.py` 输出的 `evaluation.json` 包含 `expanded_metrics` 字段。
 
 ### Q8：Git clone 很慢或失败
 
 **解决方案**：
+
 - 使用 SSH 协议：`git clone git@github.com:learner-aa/ProjectReproductionOfURLLM.git`
 - 配置 SSH over 443 端口(见 `~/.ssh/config`)：
   ```
@@ -675,6 +725,7 @@ npm run dev
 **原因**：Vite 8 要求 Node.js ≥ 20.19 或 ≥ 22.12，低版本(如 18.x)会报错。
 
 **解决方案**：
+
 ```bash
 # 1. 检查版本
 node -v
@@ -695,14 +746,15 @@ npm run dev
 **原因**：前端运行在远程服务器(如 autodl 容器)上，`localhost` 指向远程服务器而非本地。
 
 **解决方案**：
+
 ```bash
 # 使用 autodl 代理端口启动
 cd webapp
 npm run dev -- --host 0.0.0.0 --port 6006
-# 然后通过 autodl 控制台的"自定义服务"访问
+# 然后访问 http://localhost:6006
 ```
 
----
+***
 
 ## 十五、技术栈
 
@@ -710,18 +762,19 @@ npm run dev -- --host 0.0.0.0 --port 6006
 - **前端**：Vite 8 + React 19 + TypeScript 6 + TailwindCSS 4 + Recharts 3
 - **数据**：GM(Movie-Game) + AO(Office-Art) 跨域数据集 / DeepSeek 物品属性提取
 
----
+***
 
 ## 十六、相关文档
 
-| 文档 | 说明 |
-|------|------|
-| [PROJECT_REPORT.md](PROJECT_REPORT.md) | 完整项目报告(12 章，含环境、训练、评估、问题解决) |
+| 文档                                      | 说明                          |
+| --------------------------------------- | --------------------------- |
+| [PROJECT\_REPORT.md](PROJECT_REPORT.md) | 完整项目报告(12 章，含环境、训练、评估、问题解决) |
+| [RUN\_REPORT.md](RUN_REPORT.md)         | 跑通报告(早期 Qwen2-1.5B 验证记录)    |
 
----
+***
 
-**项目状态**：GM + AO 双数据集完整流程已跑通，前端展示系统上线(支持双数据集切换)，评估指标真实且有区分度。
+**项目状态**：GM 数据集完整 9 阶段流程已跑通，前端展示系统上线，评估指标真实且有区分度。HR@1=0.0275, MRR=0.0345, 远超 DG 基线。
 
-**GitHub 仓库**：https://github.com/learner-aa/ProjectReproductionOfURLLM
+**GitHub 仓库**：<https://github.com/learner-aa/ProjectReproductionOfURLLM>
 
-**Release 下载**：https://github.com/learner-aa/ProjectReproductionOfURLLM/releases/tag/v1.0.0
+**Release 下载**：<https://github.com/learner-aa/ProjectReproductionOfURLLM/releases/tag/v1.0.0>

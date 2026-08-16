@@ -8,13 +8,13 @@ LLM LoRA 微调模块
 - 支持多 GPU (DeepSpeed / FSDP)
 """
 
-import torch
-
 import json
 import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+import torch
 
 from data_utils import OUTPUT_DIR, PROCESSED_DIR, ensure_dirs
 
@@ -124,7 +124,6 @@ def load_model_and_tokenizer(model_config: Dict, training_config: Dict):
         (model, tokenizer)
     """
     try:
-        import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
         from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
     except ImportError:
@@ -142,7 +141,7 @@ def load_model_and_tokenizer(model_config: Dict, training_config: Dict):
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    # 加载模型 (FP16, 不依赖 bitsandbytes)
+    # 加载模型
     model = AutoModelForCausalLM.from_pretrained(
         base_model,
         torch_dtype=torch.float16,
@@ -150,16 +149,10 @@ def load_model_and_tokenizer(model_config: Dict, training_config: Dict):
         trust_remote_code=True,
     )
 
-    # 显式确保模型在 GPU 上
-    if torch.cuda.is_available():
-        model = model.to("cuda")
-        logger.info(f"模型已移至 GPU: {next(model.parameters()).device}")
-
-    # 启用梯度检查点 (节省显存)
-    model.config.use_cache = False
+    # 启用梯度检查点以节省显存
     model.gradient_checkpointing_enable()
-    if hasattr(model, "enable_input_require_grads"):
-        model.enable_input_require_grads()
+    model.enable_input_require_grads()
+    model.config.use_cache = False
 
     # 应用 LoRA
     lora_config = LoraConfig(
@@ -239,13 +232,10 @@ def train(config: Optional[Dict] = None):
     eval_dataset = SimpleDataset(valid_data) if valid_data else None
 
     # 训练参数
-    output_config = config.get("output", {})
-    save_dir = str(OUTPUT_DIR / output_config.get("save_dir", "lora_weights"))
-    log_dir = str(OUTPUT_DIR / output_config.get("log_dir", "logs"))
+    save_dir = str(OUTPUT_DIR / "lora_weights")
     training_args = TrainingArguments(
         output_dir=save_dir,
         num_train_epochs=training_config.get("num_epochs", 3),
-        max_steps=training_config.get("max_steps", -1),
         per_device_train_batch_size=training_config.get("batch_size", 4),
         gradient_accumulation_steps=training_config.get("gradient_accumulation_steps", 8),
         learning_rate=training_config.get("learning_rate", 1e-4),
@@ -260,11 +250,10 @@ def train(config: Optional[Dict] = None):
         eval_strategy="steps" if eval_dataset else "no",
         save_strategy="steps",
         load_best_model_at_end=eval_dataset is not None,
-        logging_dir=log_dir,
+        logging_dir=str(OUTPUT_DIR / "logs"),
         report_to=["tensorboard"],
-        dataloader_pin_memory=False,
+        dataloader_pin_memory=True,
         remove_unused_columns=False,
-        use_cpu=False,
     )
 
     # Trainer
@@ -288,7 +277,7 @@ def train(config: Optional[Dict] = None):
     trainer.train()
 
     # 保存最终模型
-    final_path = save_dir
+    final_path = str(OUTPUT_DIR / "lora_weights" / "final")
     trainer.save_model(final_path)
     tokenizer.save_pretrained(final_path)
 
@@ -300,18 +289,10 @@ def train(config: Optional[Dict] = None):
 # ============================================================
 
 if __name__ == "__main__":
-    import argparse
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     import yaml
 
-    ap = argparse.ArgumentParser(description="LoRA 微调训练")
-    ap.add_argument("--config", type=str, default=None, help="配置文件路径 (默认 lora_config.yaml)")
-    args = ap.parse_args()
-
-    if args.config:
-        config_path = Path(args.config)
-    else:
-        config_path = Path(__file__).parent.parent / "config" / "lora_config.yaml"
+    config_path = Path(__file__).parent.parent / "config" / "lora_config.yaml"
     if config_path.exists():
         with open(config_path) as f:
             cfg = yaml.safe_load(f)

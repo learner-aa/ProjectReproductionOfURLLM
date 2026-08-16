@@ -34,13 +34,15 @@ logger = logging.getLogger(__name__)
 
 # 各阶段定义及执行顺序
 STAGES = [
-    "preprocess",          # 数据预处理
-    "extract_attributes",  # 物品属性提取
-    "build_profiles",      # 用户画像构建
-    "build_instructions",  # Instruction 数据构建
-    "finetune",            # LLM 微调
-    "inference",           # LLM 推理
-    "evaluate",            # 评估
+    "preprocess",          # 1. 数据预处理
+    "extract_attributes",  # 2. 物品属性提取
+    "build_profiles",      # 3. 用户画像构建
+    "retrieve_users",      # 4. KNN 用户检索 (论文 §4.2.1)
+    "build_instructions",  # 5. Instruction 数据构建 (含检索用户)
+    "finetune",            # 6. LLM 微调
+    "inference",           # 7. LLM 推理
+    "refine_answers",      # 8. 答案精炼: BM25+域检查+DG回退 (论文 §4.2.3)
+    "evaluate",            # 9. 评估
 ]
 
 
@@ -81,37 +83,23 @@ def run_stage(stage: str, config: Dict):
         )
 
     elif stage == "extract_attributes":
+        from attribute_extraction import run_attribute_extraction
         attr_cfg = config.get("attribute_extraction", {})
-        backend = attr_cfg.get("backend", "api")
-
-        if backend == "convert":
-            # 从已有 item_prompt 数据转换 (DeepSeek V4 结果)
-            from convert_item_prompt import main as convert_main
-            import sys as _sys
-            dataset = attr_cfg.get("item_prompt_dataset", "GM")
-            _sys.argv = ["convert_item_prompt.py", "--dataset", dataset]
-            convert_main()
-
-        elif backend == "api":
-            from attribute_extraction import run_attribute_extraction
-            if not attr_cfg.get("api_key"):
-                logger.error(
-                    "属性提取需要 API key，请在 config/pipeline_config.yaml 中配置 "
-                    "attribute_extraction.api_key"
-                )
-                return
-            run_attribute_extraction(attr_cfg)
-
-        elif backend == "local":
-            from attribute_extraction import run_attribute_extraction
-            run_attribute_extraction(attr_cfg)
-
-        else:
-            logger.error(f"未知的属性提取后端: {backend}")
+        if not attr_cfg.get("api_key") and attr_cfg.get("backend", "api") == "api":
+            logger.error(
+                "属性提取需要 API key，请在 config/pipeline_config.yaml 中配置 "
+                "attribute_extraction.api_key"
+            )
+            return
+        run_attribute_extraction(attr_cfg)
 
     elif stage == "build_profiles":
         from user_profile_builder import run_profile_building
         run_profile_building(config)
+
+    elif stage == "retrieve_users":
+        from knn_retriever import run_user_retrieval
+        run_user_retrieval(config)
 
     elif stage == "build_instructions":
         from build_instruction_data import build_all_instruction_data
@@ -134,6 +122,10 @@ def run_stage(stage: str, config: Dict):
             with open(lora_cfg_path) as f:
                 lora_cfg = yaml.safe_load(f) or {}
         run_inference(config=lora_cfg)
+
+    elif stage == "refine_answers":
+        from answer_refinement import refine_predictions
+        refine_predictions(config)
 
     elif stage == "evaluate":
         from evaluate import run_evaluation

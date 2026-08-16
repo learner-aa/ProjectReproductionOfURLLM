@@ -18,11 +18,16 @@ enhancement/outputs/lora_weights/training_args.bin
 DG_Final/**/*.npy
 DG_Final/**/*.pt
 *.pt
+enhancement/*.npy
+enhancement/saved_models/*.npy
 
 # === 压缩包与系统文件 ===
 *.tar.gz
 *.zip
 .DS_Store
+
+# === 备份目录 ===
+backup_*/
 
 # === 本地文档(不上传) ===
 SHARING_GUIDE.md
