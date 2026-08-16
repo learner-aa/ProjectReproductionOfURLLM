@@ -2368,8 +2368,8 @@
     ],
     "best_step": 19400,
     "best_eval_loss": 0.5756,
-    "total_steps": 19730,
-    "description": "LoRA 微调 (19730 steps / 5 epochs)"
+    "total_steps": 19735,
+    "description": "LoRA 微调 (19735 steps / 5 epochs)"
   },
   "AO": {
     "steps": [

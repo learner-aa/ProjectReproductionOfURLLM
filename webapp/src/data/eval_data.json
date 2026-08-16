@@ -46,7 +46,7 @@
       "mrr": 0.0001
     },
     "training": {
-      "totalSteps": 19730,
+      "totalSteps": 19735,
       "epochs": 5,
       "finalLoss": 0.3914,
       "bestEvalLoss": 0.5756

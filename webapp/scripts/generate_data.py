@@ -81,19 +81,20 @@ def gen_training_logs():
         for entry in reversed(ts["log_history"]):
             if "eval_loss" in entry:
                 best_metric = entry["eval_loss"]
-                best_step = entry.get("step", ts.get("global_step", 19730))
+                best_step = entry.get("step", ts.get("global_step", 19735))
                 break
     if best_metric is None:
         best_metric = 0.0
     if best_step is None:
-        best_step = ts.get("global_step", 19730)
+        best_step = ts.get("global_step", 19735)
 
+    total_steps = ts.get("global_step", 19735)
     out = {
         "steps": steps,
         "best_step": best_step,
         "best_eval_loss": round(best_metric, 4),
-        "total_steps": 19730,
-        "description": "LoRA 微调训练日志 (19730 steps / 5 epochs, 7 modules, final_loss=0.3914)",
+        "total_steps": total_steps,
+        "description": f"LoRA 微调训练日志 ({total_steps} steps / 5 epochs, 7 modules, final_loss=0.3914)",
     }
     save_json(out, DATA_DIR / "training_logs.json")
     save_json(out, SRC_DATA_DIR / "training_logs.json")
@@ -285,7 +286,7 @@ def gen_mockdata():
             "HR@20": round(dg.get("HR@20", 0), 4),
             "MRR": round(dg.get("MRR", 0), 4),
         },
-        "model_info": "LoRA 微调 (19730 steps / 5 epochs)",
+        "model_info": "LoRA 微调 (19735 steps / 5 epochs)",
     }
 
     # 加载 training_logs (供 Dashboard 展示训练曲线)

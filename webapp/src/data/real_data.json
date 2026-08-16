@@ -5409,7 +5409,7 @@
       "HR@20": 0.0003,
       "MRR": 0.0001
     },
-    "model_info": "LoRA 微调 (19730 steps / 5 epochs)"
+    "model_info": "LoRA 微调 (19735 steps / 5 epochs)"
   },
   "trainingLogs": {
     "steps": [
@@ -7780,7 +7780,7 @@
     ],
     "best_step": 19400,
     "best_eval_loss": 0.5756,
-    "total_steps": 19730,
-    "description": "LoRA 微调训练日志 (19730 steps / 5 epochs, 7 modules, final_loss=0.3914)"
+    "total_steps": 19735,
+    "description": "LoRA 微调训练日志 (19735 steps / 5 epochs, 7 modules, final_loss=0.3914)"
   }
 }

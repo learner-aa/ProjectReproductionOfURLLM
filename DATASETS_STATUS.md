@@ -41,7 +41,7 @@
 | LoRA alpha | 32 | 32 |
 | LoRA dropout | 0.05 | 0.05 |
 | 训练轮数 (epochs) | 5 | 5 |
-| 训练步数 | 19,730 | 5,000 |
+| 训练步数 | 19,735 | 5,000 |
 | warmup | ratio=0.03 | ratio=0.03 |
 | gradient_checkpointing | true | true |
 | 训练耗时 | ~11 小时 | ~6.5 小时 |
@@ -66,7 +66,7 @@
 
 | 指标 | 值 |
 |------|-----|
-| 总训练步数 | 19,730 |
+| 总训练步数 | 19,735 |
 | 训练轮数 | 5 epochs |
 | 初始 Loss | 2.0842 |
 | 最终 Loss | 0.3914 |
@@ -123,10 +123,15 @@
 
 | Epoch | train_loss | eval_loss | 说明 |
 |-------|-----------|-----------|------|
-| 2.0 | ~0.40 | 0.4266 | 旧版 2 epochs 配置 |
+| 0.5 | ~2.0 | 0.7704 | 初始收敛 |
+| 1.0 | ~0.8 | 0.5485 | 快速下降 |
+| 2.0 | ~0.40 | 0.3946 | 继续收敛 |
+| 3.0 | ~0.25 | 0.3397 | 下降放缓 |
 | 4.0 | ~0.20 | 0.3152 | eval_loss 开始收敛 |
 | 4.5 | ~0.19 | 0.3159 | eval_loss 微涨(过拟合信号) |
 | 5.0 | 0.1948 | 0.3122 | eval_loss 几乎不变 |
+
+> **数据来源**:全部来自当前 5 epochs run 的 `trainer_state.json`(checkpoint-5000)
 
 **过拟合特征**:
 - train_loss (0.19) << eval_loss (0.31),gap ≈ 0.12
@@ -157,12 +162,16 @@
 
 ### 4.5 5 epochs vs 2 epochs 对比
 
-| 指标 | 2 epochs (旧) | 5 epochs (新) | 变化 |
-|------|--------------|--------------|------|
+> ⚠️ **数据来源说明**:下表"2 epochs"列数据来自**早期独立训练 run**(已无 checkpoint),当前仓库仅保留 5 epochs run。"5 epochs"列数据来自当前 `checkpoint-5000`。
+
+| 指标 | 2 epochs (旧 run) | 5 epochs (当前 run) | 变化 |
+|------|------------------|-------------------|------|
 | HR@1 | 0.002 | 0.000 | ↓ (过拟合) |
 | fuzzy_HR@1 | 0.003 | 0.008 | ↑ |
 | OOD 率 | 92.4% | 50.0% | ↓ (改善) |
-| eval_loss | 0.4266 | 0.3122 | ↓ (loss 更低) |
+| eval_loss | 0.4266 (旧 run) | 0.3122 (当前 run) | ↓ |
+
+> **注**:当前 5 epochs run 在 epoch 2 时的 eval_loss 为 0.3946(见 4.2 节),与旧 2 epochs run 的 0.4266 不同,因两次 run 使用不同的随机种子/数据顺序。
 
 **矛盾分析**:loss 更低、OOD 更少,但 HR@1 反而为 0?
 - **原因**:过拟合让模型学到了训练集具体物品的精确标题(如 "Avery 17011"),但测试集是不同物品,完全不匹配
@@ -245,8 +254,8 @@ LLM 生成: "avery 1 durable view 3 ring binder slant ring
 ### 训练产物
 - GM LoRA 权重:`enhancement/outputs/lora_weights/final/`
 - AO LoRA 权重:`enhancement/outputs/lora_weights_AO/final/`
-- GM 训练日志:`enhancement/outputs/lora_weights/checkpoint-19730/trainer_state.json`
-- AO 训练日志:`enhancement/outputs/lora_weights_AO/checkpoint-5000/trainer_state.json`
+- GM 训练日志:`enhancement/outputs/lora_weights/checkpoint-19735/trainer_state.json` (global_step=19735)
+- AO 训练日志:`enhancement/outputs/lora_weights_AO/checkpoint-5000/trainer_state.json` (global_step=5000)
 
 ### 推理产物
 - GM 预测:`enhancement/outputs/predictions/test_predictions.json`
@@ -277,8 +286,24 @@ LLM 生成: "avery 1 durable view 3 ring binder slant ring
 
 | 前端数据 | 数据来源 | 验证方式 |
 |---------|---------|---------|
-| eval_data.json | evaluation.json / evaluation_AO.json | 指标数值完全一致 |
+| eval_data.json | evaluation.json / evaluation_AO.json | 指标数值完全一致(四舍五入至 4 位小数) |
 | training_logs.json | trainer_state.json | 训练步数、loss、epoch 完全一致 |
 | datasets.json | refined_predictions.json | 用户推荐结果与精炼输出一致 |
 
 无任何人工编造或模拟数据。
+
+### 8.1 已知问题(不影响数据真实性,但影响指标精度)
+
+| 问题 | 影响范围 | 说明 |
+|------|---------|------|
+| AO `target_domain` 字段错误 | AO OOD 计算 | `test_instructions_AO.json` 中 `target_domain` 全部为 "Entertainment"(应为 Office/Art),`build_instruction_data.py` 硬编码 bug。OOD 率 49.95% 是基于错误域映射计算的,实际域外率可能不同 |
+| AO `ood_count` 非整数 | AO OOD 显示 | `evaluation_AO.json` 中 `ood_count=499.5`(应为整数),`evaluate.py` 计算逻辑 bug。前端显示为 500(四舍五入) |
+| GM 前端 `hr1` 语义 | GM 指标标签 | 前端 `hr1=0.0275` 实际是 `expanded_metrics.HR@1`(BM25 top-K 候选扩展),非 `exact_metrics.HR@1=0.0178`。前端 `rawHr1=0.0178` 才是 LLM 原始精确匹配 |
+| 2 epochs 对比数据来源 | 历史对比 | 4.5 节"2 epochs"列数据来自早期独立 run(已无 checkpoint),与当前 5 epochs run 非同一次训练 |
+
+### 8.2 数据精度说明
+
+- 前端显示的指标均为 4 位小数(四舍五入),源文件为完整精度
+- 例:源 `fuzzy_HR@1=0.019161` → 前端 `0.0192`
+- 例:源 `ood_rate=0.093446` → 前端 `0.0934`
+- 这种四舍五入不影响数据真实性,仅是显示精度差异
