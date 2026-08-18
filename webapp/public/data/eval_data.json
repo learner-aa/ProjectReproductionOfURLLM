@@ -46,7 +46,7 @@
       "mrr": 0.0001
     },
     "training": {
-      "totalSteps": 19730,
+      "totalSteps": 19735,
       "epochs": 5,
       "finalLoss": 0.3914,
       "bestEvalLoss": 0.5756
@@ -66,36 +66,71 @@
       "trainInstructions": 8000
     },
     "metrics": {
-      "hr1": 0.002,
-      "hr5": 0.003,
-      "hr10": 0.003,
-      "hr20": 0.004,
-      "ndcg1": 0.002,
-      "ndcg5": 0.0026,
-      "ndcg10": 0.0026,
-      "ndcg20": 0.0029,
-      "mrr": 0.0026,
-      "fuzzyHr1": 0.003,
-      "partialHr1": 0.0025,
-      "exactHr1": 0.002,
-      "oodRate": 0.924,
-      "oodCount": 924,
+      "hr1": 0.001,
+      "hr5": 0.001,
+      "hr10": 0.001,
+      "hr20": 0.001,
+      "mrr": 0.001,
+      "ndcg1": 0.001,
+      "ndcg5": 0.001,
+      "ndcg10": 0.001,
+      "ndcg20": 0.001,
+      "rawHr1": 0.001,
+      "rawMrr": 0.001,
+      "fuzzyHr1": 0.002,
+      "partialHr1": 0.0015,
+      "exactHr1": 0.001,
+      "oodRate": 0.5,
+      "oodCount": 500.0,
       "totalUsers": 1000,
-      "coldUsers": 0,
-      "warmUsers": 1000
+      "refinedHr1": 0.0,
+      "refinedHr5": 0.0,
+      "refinedHr10": 0.0,
+      "refinedHr20": 0.0,
+      "refinedMrr": 0.0,
+      "refinedOodRate": 0.5,
+      "refinedOodCount": 500.0,
+      "refinedFuzzyHr1": 0.001,
+      "refinedPartialHr1": 0.0005,
+      "refinedExactHr1": 0.0,
+      "coldUsers": 941,
+      "warmUsers": 59
     },
     "dgBaseline": {
       "hr1": 0.0,
       "hr5": 0.0,
       "hr10": 0.0,
-      "hr20": 0.001,
-      "mrr": 0.0003
+      "hr20": 0.0003,
+      "mrr": 0.0001
     },
     "training": {
-      "totalSteps": 2000,
-      "epochs": 2,
-      "finalLoss": 0.3975,
-      "bestEvalLoss": 0.4266
-    }
+      "epochs": 5,
+      "totalSteps": 5000,
+      "finalLoss": 0.5316,
+      "bestEvalLoss": 0.445,
+      "bestStep": 5000,
+      "lr": "1e-4",
+      "batchSize": "1 × 8 (grad accum)",
+      "warmupRatio": 0.03,
+      "weightDecay": 0.01,
+      "maxSeqLength": 1024,
+      "loraR": 8,
+      "loraAlpha": 16,
+      "loraDropout": 0.05,
+      "loraTargetModules": [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj"
+      ],
+      "baseModel": "Llama2-7B-hf",
+      "retrievalEnhanced": true,
+      "retrievalK": 1,
+      "earlyStopping": "patience=3"
+    },
+    "description": "AO 数据集 (Office→Art) 5 epochs LoRA 微调结果，启用 DG 检索增强 (retrieval 模板 + 真实 DG 向量)。HR@1=0.0010, fuzzy_HR@1=0.0020, OOD=50.00%"
   }
 }

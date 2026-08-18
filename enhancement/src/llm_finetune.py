@@ -257,12 +257,24 @@ def train(config: Optional[Dict] = None):
     )
 
     # Trainer
+    from transformers import Trainer, TrainingArguments
+    callbacks = []
+    early_patience = training_config.get("early_stopping_patience")
+    if early_patience and eval_dataset:
+        from transformers import EarlyStoppingCallback
+        callbacks.append(EarlyStoppingCallback(
+            early_stopping_patience=early_patience,
+            early_stopping_threshold=training_config.get("early_stopping_threshold", 0.0),
+        ))
+        logger.info(f"启用早停: patience={early_patience}, threshold={training_config.get('early_stopping_threshold', 0.0)}")
+
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=tokenizer,
+        callbacks=callbacks,
     )
 
     # 训练
@@ -292,11 +304,15 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     import yaml
 
-    config_path = Path(__file__).parent.parent / "config" / "lora_config.yaml"
+    # 根据 DATASET_SUFFIX 加载对应配置文件
+    suffix = os.environ.get("DATASET_SUFFIX", "")
+    config_name = f"lora_config{suffix}.yaml"
+    config_path = Path(__file__).parent.parent / "config" / config_name
     if config_path.exists():
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
+        logger.info(f"已加载配置: {config_path}")
         train(cfg)
     else:
-        logger.info("使用默认配置训练")
+        logger.warning(f"配置文件不存在: {config_path}, 使用默认配置")
         train()

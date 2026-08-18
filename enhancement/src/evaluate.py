@@ -604,4 +604,18 @@ def run_evaluation(config: Optional[Dict] = None):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    run_evaluation()
+    import yaml
+    import os
+
+    # 根据 DATASET_SUFFIX 加载对应配置文件
+    suffix = os.environ.get("DATASET_SUFFIX", "")
+    config_name = f"pipeline_config{suffix}.yaml"
+    config_path = Path(__file__).parent.parent / "config" / config_name
+    cfg = {}
+    if config_path.exists():
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f)
+        logger.info(f"已加载配置: {config_path}")
+    else:
+        logger.warning(f"配置文件不存在: {config_path}, 使用默认配置")
+    run_evaluation(cfg)

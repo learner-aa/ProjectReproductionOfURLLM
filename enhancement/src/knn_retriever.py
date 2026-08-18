@@ -14,6 +14,7 @@ KNN 用户检索模块 (论文 §4.2.1)
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -149,11 +150,17 @@ class UserRetriever:
         self.id_mapping = id_mapping
         self.item_metadata = item_metadata
 
-        # DG 特征
+        # DG 特征 (物品特征,非用户向量)
         self.item_fea_x = dg_features["train_x_fea"]
         self.item_fea_y = dg_features["train_y_fea"]
-        self.test_fea_x = dg_features["test_x_fea"]
-        self.test_fea_y = dg_features["test_y_fea"]
+
+        # 测试用户 DG 向量: 自动去重 (原论文每用户2行,取偶数行)
+        raw_test_x = dg_features["test_x_fea"]
+        raw_test_y = dg_features["test_y_fea"]
+        self.test_fea_x = raw_test_x[0::2] if raw_test_x.shape[0] % 2 == 0 else raw_test_x
+        self.test_fea_y = raw_test_y[0::2] if raw_test_y.shape[0] % 2 == 0 else raw_test_y
+        if raw_test_x.shape[0] != self.test_fea_x.shape[0]:
+            logger.info(f"测试用户向量去重: {raw_test_x.shape[0]} → {self.test_fea_x.shape[0]}")
 
         # 构建近似训练用户向量
         self.train_user_x, self.train_user_y, self.train_user_ids = \
@@ -169,6 +176,7 @@ class UserRetriever:
         logger.info(
             f"UserRetriever 初始化完成: "
             f"{len(self.train_user_ids)} 训练用户, "
+            f"测试用户向量 shape={self.test_fea_x.shape}, "
             f"近似向量 (后续可通过 load_real_vectors 替换)"
         )
 
@@ -180,8 +188,10 @@ class UserRetriever:
         """
         替换近似向量为 DG 模型真实输出的训练用户向量。
 
-        要求: 向量文件中用户顺序与 self.train_user_ids 一致,
-              或行数等于 len(self.train_user_ids)。
+        自动处理:
+        1. 去重: 原论文每用户2行,取偶数行去重
+        2. 数量适配: 真实向量只覆盖训练用户(8000),interactions 中的
+           valid/test 用户无真实向量,对应位置清零(检索时跳过)
 
         Args:
             train_user_x_path: X 域训练用户向量 .npy 路径
@@ -190,19 +200,72 @@ class UserRetriever:
         real_x = np.load(train_user_x_path)
         real_y = np.load(train_user_y_path)
 
-        if real_x.shape[0] != len(self.train_user_ids):
-            raise ValueError(
-                f"真实向量行数 {real_x.shape[0]} 与训练用户数 "
-                f"{len(self.train_user_ids)} 不匹配"
+        # 自动去重: 如果行数是偶数,取偶数行(原论文每用户2行)
+        if real_x.shape[0] % 2 == 0:
+            real_x_dedup = real_x[0::2]
+            real_y_dedup = real_y[0::2]
+            logger.info(
+                f"DG 向量去重: {real_x.shape[0]} → {real_x_dedup.shape[0]} "
+                f"(每用户2行,取偶数行)"
+            )
+            real_x = real_x_dedup
+            real_y = real_y_dedup
+
+        num_train = len(self.train_user_ids)
+        num_real = real_x.shape[0]
+
+        if num_real == num_train:
+            # 完全匹配,全部替换
+            self.train_user_x = real_x.astype(np.float32)
+            self.train_user_y = real_y.astype(np.float32)
+        elif num_real < num_train:
+            # 真实向量只覆盖训练用户(前 num_real 个),其余(valid/test)清零
+            # 注意: train_user_ids 由 interactions 构建,顺序为
+            # [train_users (8000), valid_users (577), test_users (1000)]
+            self.train_user_x = np.zeros_like(self.train_user_x)
+            self.train_user_y = np.zeros_like(self.train_user_y)
+            self.train_user_x[:num_real] = real_x.astype(np.float32)
+            self.train_user_y[:num_real] = real_y.astype(np.float32)
+            logger.info(
+                f"真实向量 {num_real} 替换前 {num_real} 个训练用户向量, "
+                f"其余 {num_train - num_real} 个(valid/test)清零,检索时跳过"
+            )
+        else:
+            # 真实向量多于训练用户,只取前 num_train 个
+            self.train_user_x = real_x[:num_train].astype(np.float32)
+            self.train_user_y = real_y[:num_train].astype(np.float32)
+            logger.warning(
+                f"真实向量 {num_real} > 训练用户 {num_train}, "
+                f"只取前 {num_train} 个"
             )
 
-        self.train_user_x = real_x.astype(np.float32)
-        self.train_user_y = real_y.astype(np.float32)
         self._using_real_vectors = True
         logger.info(
-            f"已替换为真实训练用户向量: shape={real_x.shape}, "
-            f"维度={real_x.shape[1]}"
+            f"已替换为真实训练用户向量: shape={self.train_user_x.shape}, "
+            f"维度={self.train_user_x.shape[1]}"
         )
+
+    def _resolve_dg_domain(self, target_domain: str) -> bool:
+        """
+        根据 target_domain 判断应使用 DG X 域还是 Y 域向量。
+
+        DG 模型 AO 数据集: X 域=Art(csv_paths[0]=item_listA), Y 域=Office(csv_paths[1]=item_listO)
+        但数据文件中 domain 标签可能为 "Entertainment"(=Art) / "Education"(=Office) (GM 标签混用)
+
+        映射规则 (固定,不依赖 domain_x_name/domain_y_name 配置):
+        - Art / Entertainment → DG X 域 (True)
+        - Office / Education → DG Y 域 (False)
+        - 默认 → DG X 域 (True)
+        """
+        td = (target_domain or "").lower()
+        # Y 域 (Office) 标签 - 先判断 Y 域,避免被 X 域的 domain_x_name 误匹配
+        if td in ("office", "education", "y"):
+            return False
+        # X 域 (Art) 标签
+        if td in ("art", "entertainment", "x"):
+            return True
+        # 默认用 X 域
+        return True
 
     def _get_query_vector(
         self,
@@ -211,7 +274,7 @@ class UserRetriever:
         target_domain: str,
     ) -> np.ndarray:
         """获取查询向量"""
-        is_x = target_domain in (self.domain_x_name, "X")
+        is_x = self._resolve_dg_domain(target_domain)
 
         if test_user_index is not None:
             # 测试用户: 直接用 DG 模型输出的向量
@@ -235,7 +298,7 @@ class UserRetriever:
 
     def _get_library_vectors(self, target_domain: str) -> np.ndarray:
         """获取检索库向量 (训练用户向量)"""
-        is_x = target_domain in (self.domain_x_name, "X")
+        is_x = self._resolve_dg_domain(target_domain)
         return self.train_user_x if is_x else self.train_user_y
 
     def retrieve(
@@ -288,6 +351,10 @@ class UserRetriever:
           "There is another similar user who has played
            movies and games before: Movie: X | Game: Y | ..."
 
+        域标签映射 (修正 AO 数据集中 GM 标签混用):
+        - Entertainment → Art (DG X 域)
+        - Education → Office (DG Y 域)
+
         Args:
             retrieved_user_ids: 检索到的训练用户 ID 列表
             max_items_per_user: 每个用户最多显示的物品数
@@ -295,6 +362,14 @@ class UserRetriever:
         Returns:
             格式化文本
         """
+        # 域标签映射: 数据文件中的错误标签 → 正确标签
+        domain_label_map = {
+            "Entertainment": "Art",
+            "Education": "Office",
+            "Art": "Art",
+            "Office": "Office",
+        }
+
         lines = []
         for uid in retrieved_user_ids:
             items = self.interactions.get(uid, [])
@@ -306,13 +381,8 @@ class UserRetriever:
                 meta = self.item_metadata.get(iid, {})
                 title = meta.get("title", iid)
                 domain = meta.get("domain", "")
-                # 简短域标签
-                if domain in (self.domain_x_name, "X"):
-                    label = self.domain_x_name
-                elif domain in (self.domain_y_name, "Y"):
-                    label = self.domain_y_name
-                else:
-                    label = domain or "Item"
+                # 使用域标签映射
+                label = domain_label_map.get(domain, domain or "Item")
                 item_texts.append(f"{label}: {title}")
 
             if item_texts:
@@ -333,6 +403,8 @@ class UserRetriever:
         """
         为某个数据划分 (train/valid/test) 批量检索相似用户。
 
+        使用 numpy 矩阵乘法一次性计算所有相似度,避免逐个用户循环。
+
         Args:
             split_data: {user_id: {"seq": [...], "target": {...}}}
             split_name: "train" / "valid" / "test"
@@ -341,55 +413,79 @@ class UserRetriever:
 
         Returns:
             {user_id: [retrieved_user_id, ...]}
+
+        注意: valid 集没有真实 DG 向量(原论文只保存 train/test 用户向量),
+              所以 valid split 直接返回空字典,build_instruction 时不会添加检索文本。
+              这会导致 valid loss 与 train 略有差异,但不影响早停和监控。
         """
+        # valid 集没有真实 DG 向量,跳过检索
+        if split_name == "valid":
+            logger.info(
+                f"检索跳过 [{split_name}]: valid 集无真实 DG 向量, "
+                f"返回空字典 ({len(split_data)} 用户)"
+            )
+            return {uid: [] for uid in split_data.keys()}
+
         results = {}
         is_test = split_name == "test"
         exclude_self = split_name == "train"
-
         total = len(split_data)
-        for idx, (user_id, data) in enumerate(split_data.items()):
-            # 确定目标域
+        user_ids = list(split_data.keys())
+
+        # 按 target_domain 分组 (X 域 / Y 域),分别批量检索
+        domain_groups = {"X": [], "Y": []}
+        for idx, (uid, data) in enumerate(split_data.items()):
             target = data.get("target", {})
-            target_domain = target.get("domain", self.domain_x_name)
+            target_domain = target.get("domain", self.domain_x_name) if isinstance(target, dict) else self.domain_x_name
             if not target_domain:
                 target_domain = self.domain_x_name
-
-            # 测试用户用 test_user_index
-            if is_test:
-                test_idx = test_user_offset + idx
-                try:
-                    retrieved = self.retrieve(
-                        test_user_index=test_idx,
-                        target_domain=target_domain,
-                        k=k,
-                        exclude_self=False,
-                    )
-                except IndexError:
-                    # 索引越界时降级为训练用户检索
-                    retrieved = self.retrieve(
-                        user_id=user_id,
-                        target_domain=target_domain,
-                        k=k,
-                        exclude_self=exclude_self,
-                    )
-            else:
-                retrieved = self.retrieve(
-                    user_id=user_id,
-                    target_domain=target_domain,
-                    k=k,
-                    exclude_self=exclude_self,
-                )
-
-            results[user_id] = retrieved
-
-            if (idx + 1) % 500 == 0:
-                logger.info(
-                    f"检索进度 [{split_name}]: {idx + 1}/{total}"
-                )
+            is_x = self._resolve_dg_domain(target_domain)
+            domain_groups["X" if is_x else "Y"].append((idx, uid))
 
         logger.info(
-            f"检索完成 [{split_name}]: {len(results)} 用户, "
-            f"k={k}, exclude_self={exclude_self}"
+            f"检索分组 [{split_name}]: X域={len(domain_groups['X'])}用户, "
+            f"Y域={len(domain_groups['Y'])}用户"
+        )
+
+        for domain_key, group in domain_groups.items():
+            if not group:
+                continue
+
+            is_x = (domain_key == "X")
+            library = self.train_user_x if is_x else self.train_user_y  # (num_train, dim)
+            library_norm = library / (np.linalg.norm(library, axis=1, keepdims=True) + 1e-8)
+
+            if is_test:
+                # 测试用户: 用 test_fea_x/y 查询
+                fea = self.test_fea_x if is_x else self.test_fea_y
+                query_indices = [test_user_offset + idx for idx, _ in group]
+                query_vecs = fea[query_indices]  # (n, dim)
+            else:
+                # 训练用户: 用 train_user_x/y 查询
+                query_indices = [self._train_user_to_idx[uid] for _, uid in group]
+                query_vecs = library[query_indices]  # (n, dim)
+
+            # 批量计算相似度
+            query_norm = query_vecs / (np.linalg.norm(query_vecs, axis=1, keepdims=True) + 1e-8)
+            sims = query_norm @ library_norm.T  # (n, num_train)
+
+            # 排除自身 (训练集)
+            if exclude_self:
+                for i, qidx in enumerate(query_indices):
+                    sims[i, qidx] = -999.0
+
+            # Top-k
+            for i, (idx, uid) in enumerate(group):
+                top_k_idx = np.argsort(sims[i])[::-1][:k]
+                results[uid] = [self.train_user_ids[j] for j in top_k_idx]
+
+            logger.info(
+                f"检索完成 [{split_name}/{domain_key}域]: {len(group)}用户, "
+                f"k={k}, exclude_self={exclude_self}"
+            )
+
+        logger.info(
+            f"检索完成 [{split_name}]: 共 {len(results)} 用户"
         )
         return results
 
@@ -499,9 +595,15 @@ if __name__ == "__main__":
     )
     import yaml
 
-    config_path = Path(__file__).parent.parent / "config" / "pipeline_config.yaml"
+    # 根据 DATASET_SUFFIX 加载对应配置文件
+    suffix = os.environ.get("DATASET_SUFFIX", "")
+    config_name = f"pipeline_config{suffix}.yaml"
+    config_path = Path(__file__).parent.parent / "config" / config_name
     cfg = {}
     if config_path.exists():
         with open(config_path) as f:
             cfg = yaml.safe_load(f) or {}
+        logger.info(f"已加载配置: {config_path}")
+    else:
+        logger.warning(f"配置文件不存在: {config_path}")
     run_user_retrieval(cfg)

@@ -31,5 +31,13 @@ enhancement/saved_models/*.npy
 # === 备份目录 ===
 backup_*/
 
+# === 备份文件 ===
+*.backup.json
+*.bak2.json
+*.pre_retrieval.json
+
+# === 日志文件 ===
+enhancement/logs_*.txt
+
 # === 本地文档(不上传) ===
 SHARING_GUIDE.md

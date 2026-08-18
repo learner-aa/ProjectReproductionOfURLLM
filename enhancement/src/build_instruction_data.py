@@ -58,6 +58,12 @@ def build_single_instruction(
         {"instruction": str, "input": str, "output": str}
     """
     target_domain = target_item.get("domain", domain_x_name)
+    # 域标签映射: AO 数据集中 GM 标签混用 (Entertainment=Art, Education=Office)
+    domain_label_map = {
+        "Entertainment": "Art",
+        "Education": "Office",
+    }
+    target_domain = domain_label_map.get(target_domain, target_domain)
     target_title = item_metadata.get(
         target_item["item_id"], {}
     ).get("title", target_item["item_id"])
@@ -81,10 +87,13 @@ def build_single_instruction(
             [i["title"] for i in similar_y[:3]]
         ) or "N/A"
 
+        # 修正 profile_text 中的域标签
+        dx_label = domain_label_map.get(domain_x_name, domain_x_name)
+        dy_label = domain_label_map.get(domain_y_name, domain_y_name)
         profile_text = (
             f"Total interactions: {behavior.get('total_interactions', 0)}\n"
-            f"Domain distribution: {domain_x_name}({behavior.get('domain_x_count', 0)}), "
-            f"{domain_y_name}({behavior.get('domain_y_count', 0)})\n"
+            f"Domain distribution: {dx_label}({behavior.get('domain_x_count', 0)}), "
+            f"{dy_label}({behavior.get('domain_y_count', 0)})\n"
             f"Top attributes: {format_attributes(semantic.get('preferred_attributes', []))}\n"
             f"Top categories: {format_attributes(semantic.get('preferred_categories', []))}"
         )
@@ -368,10 +377,16 @@ def build_all_instruction_data(config: Dict):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     import yaml
-    config_path = Path(__file__).parent.parent / "config" / "pipeline_config.yaml"
+    import os
+    # 根据 DATASET_SUFFIX 加载对应配置文件
+    suffix = os.environ.get("DATASET_SUFFIX", "")
+    config_name = f"pipeline_config{suffix}.yaml"
+    config_path = Path(__file__).parent.parent / "config" / config_name
     if config_path.exists():
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
+        logger.info(f"已加载配置: {config_path}")
         build_all_instruction_data(cfg)
     else:
+        logger.warning(f"配置文件不存在: {config_path}, 使用空配置")
         build_all_instruction_data({})
