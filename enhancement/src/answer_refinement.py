@@ -113,17 +113,7 @@ class BM25Grounding:
         if not llm_output.strip():
             return []
 
-        # 先尝试精确匹配
-        output_lower = llm_output.strip().lower()
-        if output_lower in self._title_to_item_id:
-            item_id = self._title_to_item_id[output_lower]
-            return [{
-                "item_id": item_id,
-                "title": self.item_metadata[item_id].get("title", ""),
-                "score": 1.0,
-            }]
-
-        # BM25 或 token overlap
+        # BM25 或 token overlap 检索 top-m 候选
         query_tokens = self._tokenize(llm_output)
         if not query_tokens:
             return []
@@ -142,6 +132,26 @@ class BM25Grounding:
                 "title": self.titles[idx],
                 "score": float(scores[idx]),
             })
+
+        # 精确匹配加分: 若 LLM 输出精确匹配某标题,将其置顶并给最高分
+        output_lower = llm_output.strip().lower()
+        if output_lower in self._title_to_item_id:
+            exact_id = self._title_to_item_id[output_lower]
+            exact_title = self.item_metadata[exact_id].get("title", "")
+            # 检查精确匹配项是否已在结果中
+            found = False
+            for r in results:
+                if r["item_id"] == exact_id:
+                    r["score"] = max(r["score"], 1.0)
+                    found = True
+                    break
+            if not found:
+                results.insert(0, {
+                    "item_id": exact_id,
+                    "title": exact_title,
+                    "score": 1.0,
+                })
+                results = results[:top_m]  # 保持 top_m 数量
 
         return results
 
@@ -189,11 +199,13 @@ def check_domain(
         return False
 
     # 统一域名比较
+    # 注意: AO 数据集标签混用, Art=Entertainment, Office=Education
+    # 与 knn_retriever.py 的 _resolve_dg_domain 保持一致
     def normalize_domain(d: str) -> str:
         d = d.lower().strip()
-        if d in (domain_x_name.lower(), "x"):
+        if d in (domain_x_name.lower(), "x", "art", "entertainment"):
             return "X"
-        if d in (domain_y_name.lower(), "y"):
+        if d in (domain_y_name.lower(), "y", "office", "education"):
             return "Y"
         return d
 
@@ -219,18 +231,23 @@ def dg_fallback(
     dg_scores: Optional[np.ndarray] = None,
     id_mapping: Optional[Dict[str, Any]] = None,
     item_metadata: Optional[Dict[str, Dict]] = None,
+    top_k: int = 20,
 ) -> Dict[str, Any]:
     """
     从 DG 模型评分矩阵获取推荐结果作为回退 (论文中的 I₁)。
+
+    返回 top-K 候选 (用于评估 HR@K),top-1 作为最终推荐。
 
     Args:
         test_user_index: 测试用户索引
         dg_scores: (num_test_users, num_items) 评分矩阵
         id_mapping: ID 映射表
         item_metadata: 物品元数据
+        top_k: 返回的候选数量
 
     Returns:
-        {"item_id": str, "title": str, "score": float}
+        {"item_id": str, "title": str, "score": float,
+         "top_k_titles": [str, ...], "top_k_ids": [str, ...]}
     """
     if dg_scores is None:
         dg_scores = load_dg_scores()
@@ -244,12 +261,24 @@ def dg_fallback(
             f"test_user_index {test_user_index} 超出评分矩阵范围 "
             f"({dg_scores.shape[0]})"
         )
-        return {"item_id": "", "title": "", "score": 0.0}
+        return {"item_id": "", "title": "", "score": 0.0,
+                "top_k_titles": [], "top_k_ids": []}
 
     user_scores = dg_scores[test_user_index]
-    top_idx = int(np.argmax(user_scores))
+    # Top-K 候选
+    top_k_indices = np.argsort(user_scores)[::-1][:top_k]
 
     idx_to_id = id_mapping.get("index_to_item_id", {})
+    top_k_titles = []
+    top_k_ids = []
+    for idx in top_k_indices:
+        iid = idx_to_id.get(str(int(idx)), str(int(idx)))
+        title = item_metadata.get(iid, {}).get("title", iid)
+        top_k_titles.append(title)
+        top_k_ids.append(iid)
+
+    # top-1 作为最终推荐
+    top_idx = int(top_k_indices[0])
     item_id = idx_to_id.get(str(top_idx), str(top_idx))
     title = item_metadata.get(item_id, {}).get("title", item_id)
 
@@ -257,6 +286,8 @@ def dg_fallback(
         "item_id": item_id,
         "title": title,
         "score": float(user_scores[top_idx]),
+        "top_k_titles": top_k_titles,
+        "top_k_ids": top_k_ids,
     }
 
 
@@ -318,6 +349,19 @@ def refine_predictions(
             logger.warning("DG 评分矩阵不存在，域外回退将跳过")
             fallback_enabled = False
 
+    # 加载 AO DG 候选矩阵 (用于 OOD 样本的 top-K)
+    dg_candidates = None
+    if DATASET_SUFFIX == "_AO":
+        cand_path = OUTPUT_DIR.parent / "t4_G2_final_DGresult_test_candidate_AO.npy"
+        if cand_path.exists():
+            dg_candidates = np.load(str(cand_path))
+            # 去重: 原论文每用户2行,取偶数行
+            if dg_candidates.shape[0] % 2 == 0:
+                dg_candidates = dg_candidates[0::2]
+            logger.info(f"AO DG 候选矩阵已加载: {dg_candidates.shape} (去重后)")
+        else:
+            logger.warning(f"AO DG 候选矩阵不存在: {cand_path}")
+
     # 逐条精炼
     refined_results = []
     stats = {"total": 0, "grounded": 0, "in_domain": 0, "fallback": 0}
@@ -356,13 +400,33 @@ def refine_predictions(
             elif fallback_enabled:
                 # 域外: DG 回退
                 dg_result = dg_fallback(
-                    idx, dg_scores, id_mapping, item_metadata
+                    idx, dg_scores, id_mapping, item_metadata, top_k=20
                 )
                 new_result["prediction_original"] = llm_output
                 new_result["prediction"] = dg_result["title"]
                 new_result["grounded_item_id"] = dg_result["item_id"]
                 new_result["fallback_to_dg"] = True
                 new_result["refined"] = True
+                # 对 AO: 用 DG 候选矩阵的 top-K 替换 BM25 候选
+                # (BM25 候选全跨域, DG 候选包含正确域物品)
+                if dg_candidates is not None and idx < dg_candidates.shape[0]:
+                    # 从前 1000 个候选中过滤出目标域物品,取 top-20
+                    dg_cand_ids = dg_candidates[idx][:1000]
+                    target_norm_local = target_domain.lower().strip()
+                    dg_cand_titles = []
+                    for cid in dg_cand_ids:
+                        cid_str = str(int(cid))
+                        meta = item_metadata.get(cid_str, {})
+                        d = meta.get("domain", "").lower()
+                        # Art=Entertainment, Office=Education
+                        if target_norm_local in ("art", "entertainment") and d == "entertainment":
+                            dg_cand_titles.append(meta.get("title", cid_str))
+                        elif target_norm_local in ("office", "education") and d == "education":
+                            dg_cand_titles.append(meta.get("title", cid_str))
+                        if len(dg_cand_titles) >= 20:
+                            break
+                    if dg_cand_titles:
+                        new_result["top_k_candidates"] = dg_cand_titles
                 stats["fallback"] += 1
             else:
                 new_result["refined"] = False

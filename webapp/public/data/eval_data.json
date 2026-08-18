@@ -68,13 +68,13 @@
     "metrics": {
       "hr1": 0.001,
       "hr5": 0.001,
-      "hr10": 0.001,
-      "hr20": 0.001,
-      "mrr": 0.001,
+      "hr10": 0.002,
+      "hr20": 0.003,
+      "mrr": 0.00045757575757575766,
       "ndcg1": 0.001,
-      "ndcg5": 0.001,
-      "ndcg10": 0.001,
-      "ndcg20": 0.001,
+      "ndcg5": 0.0003868528072345416,
+      "ndcg10": 0.0007430599943425637,
+      "ndcg20": 0.0010220029399936937,
       "rawHr1": 0.001,
       "rawMrr": 0.001,
       "fuzzyHr1": 0.002,
@@ -131,6 +131,6 @@
       "retrievalK": 1,
       "earlyStopping": "patience=3"
     },
-    "description": "AO 数据集 (Office→Art) 5 epochs LoRA 微调结果，启用 DG 检索增强 (retrieval 模板 + 真实 DG 向量)。HR@1=0.0010, fuzzy_HR@1=0.0020, OOD=50.00%"
+    "description": "AO 数据集 (Office→Art) 5 epochs LoRA 微调结果，启用 DG 检索增强 (retrieval 模板 + 真实 DG 向量)。LLM 精确匹配 HR@1=0.0010 (1/1000), BM25 扩展 HR@10=0.0020, fuzzy_HR@1=0.0020, OOD=50.00%"
   }
 }
