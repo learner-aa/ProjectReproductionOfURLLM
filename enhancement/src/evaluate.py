@@ -26,6 +26,56 @@ from data_utils import (
     load_dg_scores, load_dg_candidates, load_dg_config,
 )
 
+# AO 数据集: 复用 answer_refinement 的 CSV 映射与 uid→行映射
+_AO_HELPERS = None
+def _get_ao_helpers():
+    global _AO_HELPERS
+    if _AO_HELPERS is not None:
+        return _AO_HELPERS
+    import csv as _csv
+    from pathlib import Path as _Path
+    proj_root = _Path(__file__).resolve().parent.parent
+    dg_root = proj_root.parent / "DG_Final" / "AO"
+
+    # CSV: asin → (title, dg_index)
+    asin_to_dg = {}
+    for p in [dg_root / "item_listA_F.csv", dg_root / "item_listO_AA_F.csv"]:
+        if not p.exists():
+            continue
+        with open(p, encoding="utf-8") as f:
+            next(f, None)
+            for row in _csv.reader(f):
+                if len(row) < 3:
+                    continue
+                try:
+                    asin_to_dg[row[0].strip()] = int(row[2].strip())
+                except (ValueError, IndexError):
+                    continue
+
+    # uid → candidate Art 行 (gt_dg_idx < M_LENGTH=18639 的行)
+    uid_to_art_row = {}
+    M_LENGTH = 18639
+    test_f2 = dg_root / "test_F2.txt"
+    if test_f2.exists():
+        with open(test_f2, encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                parts = line.strip().split("\t")
+                if len(parts) < 3:
+                    continue
+                uid = parts[0]
+                last = parts[-1].split("|")
+                if not last:
+                    continue
+                try:
+                    gt_dg_idx = int(last[0])
+                except ValueError:
+                    continue
+                if gt_dg_idx < M_LENGTH:
+                    uid_to_art_row[uid] = i
+
+    _AO_HELPERS = (asin_to_dg, uid_to_art_row)
+    return _AO_HELPERS
+
 logger = logging.getLogger(__name__)
 
 
@@ -238,6 +288,9 @@ def evaluate_dg_baseline(
     """
     从 DG 模型的评分矩阵计算基线指标。
 
+    GM 数据集: 用 best_trte 评分矩阵 argsort + id_mapping (原逻辑)
+    AO 数据集: 用 candidate 矩阵 (值=CSV dg_index) + CSV asin→dg_index 映射
+
     Args:
         test_data: 测试集数据
         id_mapping: ID 映射表
@@ -246,15 +299,6 @@ def evaluate_dg_baseline(
     Returns:
         指标字典
     """
-    try:
-        scores = load_dg_scores()
-    except FileNotFoundError:
-        logger.warning("DG 评分矩阵不存在，跳过基线评估")
-        return {}
-
-    item_to_idx = id_mapping.get("item_id_to_index", {})
-    user_ids = list(test_data.keys())
-
     metrics = {}
     for k in k_values:
         metrics[f"HR@{k}"] = 0.0
@@ -262,32 +306,80 @@ def evaluate_dg_baseline(
     metrics["MRR"] = 0.0
     valid_count = 0
 
-    for ui, user_id in enumerate(user_ids):
-        if ui >= scores.shape[0]:
-            break
-        target = test_data[user_id].get("target", {})
-        target_id = target.get("item_id", "")
-        target_idx = item_to_idx.get(target_id)
+    # AO 数据集: 用 candidate 矩阵
+    if DATASET_SUFFIX == "_AO":
+        try:
+            candidates = load_dg_candidates()  # (2000, 10000), 值=CSV dg_index
+        except FileNotFoundError:
+            logger.warning("AO DG candidate 矩阵不存在，跳过基线评估")
+            return {}
 
-        if target_idx is None:
-            continue
+        asin_to_dg, uid_to_art_row = _get_ao_helpers()
+        logger.info(f"AO DG 基线评估: candidate shape={candidates.shape}, "
+                    f"CSV映射={len(asin_to_dg)}, uid映射={len(uid_to_art_row)}")
 
-        user_scores = scores[ui]
-        sorted_items = np.argsort(user_scores)[::-1]
+        user_ids = list(test_data.keys())
+        for user_id in user_ids:
+            target = test_data[user_id].get("target", {})
+            target_asin = target.get("item_id", "")
+            gt_dg_idx = asin_to_dg.get(target_asin)
+            if gt_dg_idx is None:
+                continue
 
-        valid_count += 1
-        target_rank = np.where(sorted_items == target_idx)[0]
-        if len(target_rank) > 0:
-            rank = target_rank[0] + 1
-            metrics["MRR"] += 1.0 / rank
-            for k in k_values:
-                if rank <= k:
-                    metrics[f"HR@{k}"] += 1.0
-                    metrics[f"NDCG@{k}"] += 1.0 / np.log2(rank + 1)
+            art_row = uid_to_art_row.get(str(user_id))
+            if art_row is None or art_row >= candidates.shape[0]:
+                continue
+
+            valid_count += 1
+            cand_row = candidates[art_row]
+            # 找 ground truth 在 candidate 中的排名
+            match_pos = np.where(cand_row == gt_dg_idx)[0]
+            if len(match_pos) > 0:
+                rank = int(match_pos[0]) + 1
+                metrics["MRR"] += 1.0 / rank
+                for k in k_values:
+                    if rank <= k:
+                        metrics[f"HR@{k}"] += 1.0
+                        metrics[f"NDCG@{k}"] += 1.0 / np.log2(rank + 1)
+
+    else:
+        # GM 数据集: 原逻辑 (best_trte 矩阵 argsort + id_mapping)
+        try:
+            scores = load_dg_scores()
+        except FileNotFoundError:
+            logger.warning("DG 评分矩阵不存在，跳过基线评估")
+            return {}
+
+        item_to_idx = id_mapping.get("item_id_to_index", {})
+        user_ids = list(test_data.keys())
+
+        for ui, user_id in enumerate(user_ids):
+            if ui >= scores.shape[0]:
+                break
+            target = test_data[user_id].get("target", {})
+            target_id = target.get("item_id", "")
+            target_idx = item_to_idx.get(target_id)
+
+            if target_idx is None:
+                continue
+
+            user_scores = scores[ui]
+            sorted_items = np.argsort(user_scores)[::-1]
+
+            valid_count += 1
+            target_rank = np.where(sorted_items == target_idx)[0]
+            if len(target_rank) > 0:
+                rank = target_rank[0] + 1
+                metrics["MRR"] += 1.0 / rank
+                for k in k_values:
+                    if rank <= k:
+                        metrics[f"HR@{k}"] += 1.0
+                        metrics[f"NDCG@{k}"] += 1.0 / np.log2(rank + 1)
 
     if valid_count > 0:
         for key in metrics:
-            metrics[key] /= valid_count
+            if isinstance(metrics[key], float):
+                metrics[key] /= valid_count
 
     metrics["evaluated_users"] = valid_count
     return metrics
@@ -313,12 +405,22 @@ def compute_out_of_domain_rate(
     Returns:
         {"ood_rate": float, "ood_count": int, "total": int}
     """
-    # 构建标题 → 域的映射
+    # 域标签归一化: AO 数据集里 Entertainment=Art, Education=Office
+    # (convert_dg_data.py 用 Entertainment/Education, build_instruction_data.py 映射为 Art/Office)
+    def normalize_domain(d: str) -> str:
+        d = d.lower().strip()
+        if d in ("art", "entertainment"):
+            return "Art"
+        if d in ("office", "education"):
+            return "Office"
+        return d.capitalize() if d else d
+
+    # 构建标题 → 归一化域的映射
     title_to_domain = {}
     for item_id, meta in item_metadata.items():
         title = meta.get("title", "").lower().strip()
         if title:
-            title_to_domain[title] = meta.get("domain", "Unknown")
+            title_to_domain[title] = normalize_domain(meta.get("domain", "Unknown"))
 
     ood_count = 0
     total = len(predictions)
@@ -326,8 +428,9 @@ def compute_out_of_domain_rate(
     for pred, target_domain in zip(predictions, target_domains):
         pred_lower = pred.lower().strip()
         matched_domain = title_to_domain.get(pred_lower)
+        target_norm = normalize_domain(target_domain)
 
-        if matched_domain and matched_domain != target_domain:
+        if matched_domain and matched_domain != target_norm:
             ood_count += 1
         elif matched_domain is None:
             # 无法匹配到真实物品，视为潜在域外
@@ -427,17 +530,17 @@ def run_evaluation(config: Optional[Dict] = None):
         interactions = load_json(inter_path)
 
     item_metadata = {}
-    meta_path = PROCESSED_DIR / "item_metadata.json"
+    meta_path = PROCESSED_DIR / f"item_metadata{DATASET_SUFFIX}.json"
     if meta_path.exists():
         item_metadata = load_json(meta_path)
 
     id_mapping = {}
-    map_path = PROCESSED_DIR / "id_mapping.json"
+    map_path = PROCESSED_DIR / f"id_mapping{DATASET_SUFFIX}.json"
     if map_path.exists():
         id_mapping = load_json(map_path)
 
     test_data = {}
-    test_path = PROCESSED_DIR / "test.json"
+    test_path = PROCESSED_DIR / f"test{DATASET_SUFFIX}.json"
     if test_path.exists():
         test_data = load_json(test_path)
 
@@ -534,7 +637,7 @@ def run_evaluation(config: Optional[Dict] = None):
 
     # 7. UHR (User Hit Rate)
     uhr_metrics = {}
-    retrieval_path = PROCESSED_DIR / "retrieval_results.json"
+    retrieval_path = PROCESSED_DIR / f"retrieval_results{DATASET_SUFFIX}.json"
     if retrieval_path.exists() and test_data and interactions:
         retrieval_results = load_json(retrieval_path)
         uhr_metrics = compute_uhr(retrieval_results, test_data, interactions)

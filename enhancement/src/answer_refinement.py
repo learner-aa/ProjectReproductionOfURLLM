@@ -23,6 +23,7 @@ import numpy as np
 from data_utils import (
     OUTPUT_DIR,
     PROCESSED_DIR,
+    PROJECT_ROOT,
     DATASET_SUFFIX,
     load_dg_scores,
     load_dg_candidates,
@@ -198,26 +199,28 @@ def check_domain(
     if not grounded_items:
         return False
 
-    # 统一域名比较
-    # 注意: AO 数据集标签混用, Art=Entertainment, Office=Education
-    # 与 knn_retriever.py 的 _resolve_dg_domain 保持一致
+    # 统一域名: AO 数据集里 Entertainment 标签 = Art 物品, Education 标签 = Office 物品
+    # (convert_dg_data.py 用 Entertainment/Education, build_instruction_data.py 映射为 Art/Office)
+    # 这里统一归一化为 Art / Office 再比较
     def normalize_domain(d: str) -> str:
         d = d.lower().strip()
-        if d in (domain_x_name.lower(), "x", "art", "entertainment"):
-            return "X"
-        if d in (domain_y_name.lower(), "y", "office", "education"):
-            return "Y"
-        return d
+        if d in ("art", "entertainment"):
+            return "Art"
+        if d in ("office", "education"):
+            return "Office"
+        return d.capitalize() if d else d
 
     target_norm = normalize_domain(target_domain)
 
-    for item in grounded_items:
-        item_id = item.get("item_id", "")
-        meta = item_metadata.get(item_id, {})
-        item_domain = normalize_domain(meta.get("domain", ""))
+    # 放宽 OOD 判定: 只检查 top-1 是否在目标域 (论文 Algorithm 1 是检查 max_I/min_I, 等价于 top-1)
+    # 之前检查 top-m 中任一物品错域就判 OOD, 过于严格导致 50% OOD rate
+    best = grounded_items[0]
+    item_id = best.get("item_id", "")
+    meta = item_metadata.get(item_id, {})
+    item_domain = normalize_domain(meta.get("domain", ""))
 
-        if item_domain and item_domain != target_norm:
-            return False
+    if item_domain and item_domain != target_norm:
+        return False
 
     return True
 
@@ -226,29 +229,172 @@ def check_domain(
 # DG 模型回退
 # ============================================================
 
+def _load_dg_index_to_title() -> Dict[int, str]:
+    """建立 DG dg_index → item_title 映射 (从原论文 CSV)。
+
+    CSV 格式: asin, title, dg_index
+    Art 物品 dg_index 范围: 0 ~ 18638
+    Office 物品 dg_index 范围: 18639 ~ 38395
+    """
+    cache = getattr(_load_dg_index_to_title, "_cache", None)
+    if cache is not None:
+        return cache
+
+    import csv
+    dg_root = PROJECT_ROOT.parent / "DG_Final" / "AO"
+    csv_paths = [dg_root / "item_listA_F.csv", dg_root / "item_listO_AA_F.csv"]
+    mapping = {}
+    for p in csv_paths:
+        if not p.exists():
+            logger.warning(f"CSV 不存在: {p}")
+            continue
+        with open(p, encoding="utf-8") as f:
+            next(f, None)  # 跳过表头
+            for row in csv.reader(f):
+                if len(row) < 3:
+                    continue
+                try:
+                    dg_idx = int(row[2].strip())
+                    title = row[1].strip()
+                    mapping[dg_idx] = title
+                except (ValueError, IndexError):
+                    continue
+    logger.info(f"已加载 dg_index → title 映射: {len(mapping)} 条")
+    _load_dg_index_to_title._cache = mapping
+    return mapping
+
+
+def _load_uid_to_dg_row() -> Dict[str, int]:
+    """建立 uid → DG candidate 矩阵的 Art 行索引映射。
+
+    test_F2.txt 每用户有 2 行 (Art 查询 + Office 查询)。
+    pipeline test_AO.json 的 target_domain 全是 Art, 所以取 Art 行。
+
+    Art 查询的行: ground truth dg_index < M_length (18639)
+    """
+    cache = getattr(_load_uid_to_dg_row, "_cache", None)
+    if cache is not None:
+        return cache
+
+    dg_root = PROJECT_ROOT.parent / "DG_Final" / "AO"
+    test_f2_path = dg_root / "test_F2.txt"
+    M_LENGTH = 18639  # Art 物品数
+
+    uid_to_row = {}
+    if not test_f2_path.exists():
+        logger.warning(f"test_F2.txt 不存在: {test_f2_path}")
+        _load_uid_to_dg_row._cache = uid_to_row
+        return uid_to_row
+
+    with open(test_f2_path, encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            parts = line.strip().split("\t")
+            if len(parts) < 3:
+                continue
+            uid = parts[0]
+            last = parts[-1].split("|")
+            if len(last) < 1:
+                continue
+            try:
+                gt_dg_idx = int(last[0])
+            except ValueError:
+                continue
+            # Art 查询行: ground truth 是 Art 物品 (dg_index < M_LENGTH)
+            if gt_dg_idx < M_LENGTH:
+                uid_to_row[uid] = i
+
+    logger.info(f"已加载 uid → DG Art行 映射: {len(uid_to_row)} 个用户")
+    _load_uid_to_dg_row._cache = uid_to_row
+    return uid_to_row
+
+
 def dg_fallback(
     test_user_index: int,
     dg_scores: Optional[np.ndarray] = None,
     id_mapping: Optional[Dict[str, Any]] = None,
     item_metadata: Optional[Dict[str, Dict]] = None,
     top_k: int = 20,
+    user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    从 DG 模型评分矩阵获取推荐结果作为回退 (论文中的 I₁)。
+    """从 DG 模型 candidate 矩阵获取推荐结果作为回退 (论文中的 I₁)。
 
-    返回 top-K 候选 (用于评估 HR@K),top-1 作为最终推荐。
+    修复: AO 数据集使用 candidate 矩阵 (值=CSV dg_index),
+    而非 best_trte 矩阵 (列=DG 内部索引, 无法直接映射)。
 
     Args:
-        test_user_index: 测试用户索引
-        dg_scores: (num_test_users, num_items) 评分矩阵
-        id_mapping: ID 映射表
-        item_metadata: 物品元数据
+        test_user_index: pipeline test 用户索引 (0-based)
+        dg_scores: 保留参数, 不再使用 (改用 candidate)
+        id_mapping: 保留参数, 不再使用
+        item_metadata: 保留参数, 不再使用
         top_k: 返回的候选数量
+        user_id: 用户 ID (如 "8000"), 用于映射到 DG candidate 的 Art 行
 
     Returns:
         {"item_id": str, "title": str, "score": float,
          "top_k_titles": [str, ...], "top_k_ids": [str, ...]}
     """
+    # GM 数据集走原逻辑 (best_trte 矩阵 + id_mapping)
+    if not DATASET_SUFFIX:
+        return _dg_fallback_gm(
+            test_user_index, dg_scores, id_mapping, item_metadata, top_k
+        )
+
+    # AO 数据集: 用 candidate 矩阵 + CSV 映射
+    candidates = load_dg_candidates()  # (2000, 10000)
+    dg_idx_to_title = _load_dg_index_to_title()
+    uid_to_row = _load_uid_to_dg_row()
+
+    # 通过 user_id 映射到 candidate 的 Art 行
+    if user_id is None:
+        logger.warning("AO dg_fallback 需要 user_id 参数")
+        return {"item_id": "", "title": "", "score": 0.0,
+                "top_k_titles": [], "top_k_ids": []}
+
+    dg_row = uid_to_row.get(str(user_id))
+    if dg_row is None:
+        logger.warning(f"uid={user_id} 未找到对应的 DG Art 行")
+        return {"item_id": "", "title": "", "score": 0.0,
+                "top_k_titles": [], "top_k_ids": []}
+
+    if dg_row >= candidates.shape[0]:
+        logger.warning(
+            f"dg_row {dg_row} 超出 candidate 矩阵范围 ({candidates.shape[0]})"
+        )
+        return {"item_id": "", "title": "", "score": 0.0,
+                "top_k_titles": [], "top_k_ids": []}
+
+    # candidate 行的值已经是 CSV dg_index, 直接取 top-K
+    top_k_dg_indices = candidates[dg_row][:top_k]
+
+    top_k_titles = []
+    top_k_ids = []
+    for dg_idx in top_k_dg_indices:
+        dg_idx_int = int(dg_idx)
+        title = dg_idx_to_title.get(dg_idx_int, str(dg_idx_int))
+        top_k_titles.append(title)
+        top_k_ids.append(str(dg_idx_int))
+
+    # top-1 作为最终推荐
+    top_idx = int(top_k_dg_indices[0])
+    title = dg_idx_to_title.get(top_idx, str(top_idx))
+
+    return {
+        "item_id": str(top_idx),
+        "title": title,
+        "score": 1.0 - top_idx / 40000.0,  # 占位分数
+        "top_k_titles": top_k_titles,
+        "top_k_ids": top_k_ids,
+    }
+
+
+def _dg_fallback_gm(
+    test_user_index: int,
+    dg_scores: Optional[np.ndarray],
+    id_mapping: Optional[Dict[str, Any]],
+    item_metadata: Optional[Dict[str, Dict]],
+    top_k: int,
+) -> Dict[str, Any]:
+    """GM 数据集的 DG 回退 (原逻辑)。"""
     if dg_scores is None:
         dg_scores = load_dg_scores()
     if id_mapping is None:
@@ -265,7 +411,6 @@ def dg_fallback(
                 "top_k_titles": [], "top_k_ids": []}
 
     user_scores = dg_scores[test_user_index]
-    # Top-K 候选
     top_k_indices = np.argsort(user_scores)[::-1][:top_k]
 
     idx_to_id = id_mapping.get("index_to_item_id", {})
@@ -277,7 +422,6 @@ def dg_fallback(
         top_k_titles.append(title)
         top_k_ids.append(iid)
 
-    # top-1 作为最终推荐
     top_idx = int(top_k_indices[0])
     item_id = idx_to_id.get(str(top_idx), str(top_idx))
     title = item_metadata.get(item_id, {}).get("title", item_id)
@@ -399,34 +543,20 @@ def refine_predictions(
                 stats["in_domain"] += 1
             elif fallback_enabled:
                 # 域外: DG 回退
+                # AO: 需要 user_id 来映射到 DG candidate 的 Art 行
+                uid = result.get("user_id", "")
                 dg_result = dg_fallback(
-                    idx, dg_scores, id_mapping, item_metadata, top_k=20
+                    idx, dg_scores, id_mapping, item_metadata, top_k=20,
+                    user_id=str(uid) if uid else None,
                 )
                 new_result["prediction_original"] = llm_output
                 new_result["prediction"] = dg_result["title"]
                 new_result["grounded_item_id"] = dg_result["item_id"]
                 new_result["fallback_to_dg"] = True
                 new_result["refined"] = True
-                # 对 AO: 用 DG 候选矩阵的 top-K 替换 BM25 候选
-                # (BM25 候选全跨域, DG 候选包含正确域物品)
-                if dg_candidates is not None and idx < dg_candidates.shape[0]:
-                    # 从前 1000 个候选中过滤出目标域物品,取 top-20
-                    dg_cand_ids = dg_candidates[idx][:1000]
-                    target_norm_local = target_domain.lower().strip()
-                    dg_cand_titles = []
-                    for cid in dg_cand_ids:
-                        cid_str = str(int(cid))
-                        meta = item_metadata.get(cid_str, {})
-                        d = meta.get("domain", "").lower()
-                        # Art=Entertainment, Office=Education
-                        if target_norm_local in ("art", "entertainment") and d == "entertainment":
-                            dg_cand_titles.append(meta.get("title", cid_str))
-                        elif target_norm_local in ("office", "education") and d == "education":
-                            dg_cand_titles.append(meta.get("title", cid_str))
-                        if len(dg_cand_titles) >= 20:
-                            break
-                    if dg_cand_titles:
-                        new_result["top_k_candidates"] = dg_cand_titles
+                # 用 DG candidate 返回的 top-K 候选
+                if dg_result["top_k_titles"]:
+                    new_result["top_k_candidates"] = dg_result["top_k_titles"]
                 stats["fallback"] += 1
             else:
                 new_result["refined"] = False

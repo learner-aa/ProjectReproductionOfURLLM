@@ -58,9 +58,9 @@ def jaccard(set_a, set_b):
 # ============================================================
 # 1. training_logs.json
 # ============================================================
-def gen_training_logs():
-    print("[1] training_logs.json")
-    ts = load_json(ENH / "outputs/lora_weights/checkpoint-19735/trainer_state.json")
+def _build_log_from_trainer_state(ts_path, default_steps, desc):
+    """从 trainer_state.json 构建训练日志 (单数据集)。"""
+    ts = load_json(ts_path)
     steps = []
     for entry in ts["log_history"]:
         if "loss" in entry:
@@ -73,29 +73,53 @@ def gen_training_logs():
             if "eval_loss" in entry:
                 step["eval_loss"] = round(entry["eval_loss"], 4)
             steps.append(step)
-    # best_metric 可能为 None (未启用 load_best_model_at_end), 从 log_history 中获取最后的 eval_loss
     best_metric = ts.get("best_metric")
     best_step = ts.get("best_global_step")
     if best_metric is None:
-        # 从 log_history 中找最后一条 eval 记录
         for entry in reversed(ts["log_history"]):
             if "eval_loss" in entry:
                 best_metric = entry["eval_loss"]
-                best_step = entry.get("step", ts.get("global_step", 19735))
+                best_step = entry.get("step", ts.get("global_step", default_steps))
                 break
     if best_metric is None:
         best_metric = 0.0
     if best_step is None:
-        best_step = ts.get("global_step", 19735)
-
-    total_steps = ts.get("global_step", 19735)
-    out = {
+        best_step = ts.get("global_step", default_steps)
+    total_steps = ts.get("global_step", default_steps)
+    final_loss = steps[-1]["loss"] if steps else 0.0
+    return {
         "steps": steps,
         "best_step": best_step,
         "best_eval_loss": round(best_metric, 4),
         "total_steps": total_steps,
-        "description": f"LoRA 微调训练日志 ({total_steps} steps / 5 epochs, 7 modules, final_loss=0.3914)",
+        "final_loss": final_loss,
+        "description": desc,
     }
+
+
+def gen_training_logs():
+    print("[1] training_logs.json")
+    # GM: lora_weights/checkpoint-19735
+    gm_path = ENH / "outputs/lora_weights/checkpoint-19735/trainer_state.json"
+    gm_log = _build_log_from_trainer_state(
+        gm_path, 19735,
+        f"LoRA 微调训练日志 (19735 steps / 5 epochs, 7 modules, final_loss=0.3914)",
+    )
+    # AO: lora_weights_AO/checkpoint-5000
+    ao_path = ENH / "outputs/lora_weights_AO/checkpoint-5000/trainer_state.json"
+    ao_final = 0.0
+    if ao_path.exists():
+        ao_ts = load_json(ao_path)
+        for entry in reversed(ao_ts.get("log_history", [])):
+            if "loss" in entry:
+                ao_final = round(entry["loss"], 4)
+                break
+    ao_log = _build_log_from_trainer_state(
+        ao_path, 5000,
+        f"LoRA 微调训练日志 (5000 steps / 5 epochs, 7 modules, final_loss={ao_final})",
+    )
+    # 双层结构 {GM: {...}, AO: {...}}
+    out = {"GM": gm_log, "AO": ao_log}
     save_json(out, DATA_DIR / "training_logs.json")
     save_json(out, SRC_DATA_DIR / "training_logs.json")
     return out

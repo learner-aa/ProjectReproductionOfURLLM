@@ -72,22 +72,34 @@ def load_dg_features() -> Dict[str, np.ndarray]:
 
 
 def load_dg_scores() -> np.ndarray:
-    """加载 DG 模型测试评分矩阵 (num_test_users, num_items)"""
-    path = PROJECT_ROOT / "best_trte_XORY_DG_.npy"
+    """加载 DG 模型测试评分矩阵 (num_test_users, num_items)
+
+    GM 数据集: best_trte_XORY_DG_.npy
+    AO 数据集: best_trte_XORY_DG_390_.npy
+    """
+    ds = "AO" if DATASET_SUFFIX else "GM"
+    fname = "best_trte_XORY_DG_390_.npy" if ds == "AO" else "best_trte_XORY_DG_.npy"
+    path = PROJECT_ROOT / fname
     if not path.exists():
-        raise FileNotFoundError(f"评分矩阵不存在: {path}")
+        raise FileNotFoundError(f"评分矩阵不存在: {path} (dataset={ds})")
     scores = np.load(str(path))
-    logger.info(f"已加载评分矩阵: shape={scores.shape}")
+    logger.info(f"已加载评分矩阵 (dataset={ds}): shape={scores.shape}")
     return scores
 
 
 def load_dg_candidates() -> np.ndarray:
-    """加载 DG 模型候选物品矩阵 (num_test_users, 10000)"""
-    path = PROJECT_ROOT / "t4_G2_final_DGresult_test_candidate.npy"
+    """加载 DG 模型候选物品矩阵 (num_test_users, 10000)
+
+    GM 数据集: t4_G2_final_DGresult_test_candidate.npy
+    AO 数据集: t4_G2_final_DGresult_test_candidate_AO.npy
+    """
+    ds = "AO" if DATASET_SUFFIX else "GM"
+    fname = "t4_G2_final_DGresult_test_candidate_AO.npy" if ds == "AO" else "t4_G2_final_DGresult_test_candidate.npy"
+    path = PROJECT_ROOT / fname
     if not path.exists():
-        raise FileNotFoundError(f"候选矩阵不存在: {path}")
+        raise FileNotFoundError(f"候选矩阵不存在: {path} (dataset={ds})")
     candidates = np.load(str(path))
-    logger.info(f"已加载候选矩阵: shape={candidates.shape}")
+    logger.info(f"已加载候选矩阵 (dataset={ds}): shape={candidates.shape}")
     return candidates
 
 

@@ -66,36 +66,40 @@
       "trainInstructions": 8000
     },
     "metrics": {
-      "hr1": 0.0,
+      "hr1": 0.001,
       "hr5": 0.001,
-      "hr10": 0.002,
-      "hr20": 0.003,
-      "mrr": 0.00045757575757575766,
-      "ndcg1": 0.0,
-      "ndcg5": 0.0003868528072345416,
-      "ndcg10": 0.0007430599943425637,
-      "ndcg20": 0.0010220029399936937,
+      "hr10": 0.001,
+      "hr20": 0.001,
+      "mrr": 0.001,
+      "ndcg1": 0.001,
+      "ndcg5": 0.001,
+      "ndcg10": 0.001,
+      "ndcg20": 0.001,
       "fuzzyHr1": 0.002,
       "partialHr1": 0.0015,
       "exactHr1": 0.001,
-      "oodRate": 0.5,
-      "oodCount": 500,
+      "oodRate": 0.927,
+      "oodCount": 927,
       "totalUsers": 1000,
       "coldUsers": 941,
       "warmUsers": 59,
-      "refinedHr1": 0.0,
-      "refinedMrr": 0.0,
-      "refinedOodRate": 0.5,
-      "refinedOodCount": 500,
+      "refinedHr1": 0.001,
+      "refinedMrr": 0.001,
+      "refinedOodRate": 0.43,
+      "refinedOodCount": 430,
       "rawHr1": 0.001,
       "rawMrr": 0.001
     },
     "dgBaseline": {
-      "hr1": 0.0,
-      "hr5": 0.0,
-      "hr10": 0.0,
-      "hr20": 0.0003,
-      "mrr": 0.0001
+      "hr1": 0.001,
+      "hr5": 0.004,
+      "hr10": 0.005,
+      "hr20": 0.005,
+      "mrr": 0.001977471117550566,
+      "ndcg1": 0.001,
+      "ndcg5": 0.0022482059233813276,
+      "ndcg10": 0.00260441311048935,
+      "ndcg20": 0.00260441311048935
     },
     "training": {
       "epochs": 5,
@@ -125,22 +129,25 @@
       "retrievalK": 1,
       "earlyStopping": "patience=3"
     },
-    "description": "AO 数据集 (Office→Art) 5 epochs LoRA 微调结果，启用 DG 检索增强 (retrieval 模板 + 真实 DG 向量)。DG候选扩展 HR@1=0.0000, HR@5=0.0010, HR@10=0.0020, HR@20=0.0030, MRR=0.0005, OOD=50.00%",
+    "description": "AO 数据集 (Office→Art) 5 epochs LoRA 微调结果，启用 DG 检索增强 (retrieval 模板 + 真实 DG 向量)。DG候选扩展 HR@1=0.0010, HR@5=0.0040, HR@10=0.0050, HR@20=0.0050, MRR=0.0019, OOD=92.70%, refined_OOD=43.00%",
     "expandedMetrics": {
-      "hr1": 0.0,
-      "hr5": 0.001,
-      "hr10": 0.002,
-      "hr20": 0.003,
-      "ndcg1": 0.0,
-      "ndcg5": 0.0003868528072345416,
-      "ndcg10": 0.0007430599943425637,
-      "ndcg20": 0.0010220029399936937,
-      "mrr": 0.00045757575757575766
+      "hr1": 0.001,
+      "hr5": 0.004,
+      "hr10": 0.005,
+      "hr20": 0.005,
+      "ndcg1": 0.001,
+      "ndcg5": 0.0022482059233813276,
+      "ndcg10": 0.00260441311048935,
+      "ndcg20": 0.00260441311048935,
+      "mrr": 0.0018666666666666666
     },
     "refinedMetrics": {
-      "hr1": 0.0,
-      "ndcg5": 0.0,
-      "mrr": 0.0
+      "hr1": 0.001,
+      "hr5": 0.001,
+      "hr10": 0.001,
+      "hr20": 0.001,
+      "ndcg5": 0.001,
+      "mrr": 0.001
     }
   }
 }

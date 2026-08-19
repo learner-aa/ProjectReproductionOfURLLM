@@ -86,6 +86,18 @@ export interface EvalTraining {
   bestEvalLoss: number
 }
 
+export interface ExpandedMetrics {
+  hr1: number
+  hr5: number
+  hr10: number
+  hr20: number
+  ndcg1: number
+  ndcg5: number
+  ndcg10: number
+  ndcg20: number
+  mrr: number
+}
+
 export interface EvalDataset {
   label: string
   sourceDomain: string
@@ -94,6 +106,7 @@ export interface EvalDataset {
   metrics: EvalMetrics
   dgBaseline: DgBaseline
   training: EvalTraining
+  expandedMetrics?: ExpandedMetrics
 }
 
 export interface TrainingStep {

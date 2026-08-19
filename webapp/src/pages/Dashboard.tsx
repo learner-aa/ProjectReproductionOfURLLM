@@ -58,6 +58,12 @@ export function Dashboard() {
   const logs = trainingLogs[tab]
   const { metrics, dgBaseline, training, stats } = data
 
+  // AO 数据集 LLM 仅生成 top-1 预测, 所有 K 值指标退化为 HR@1。
+  // 用 expandedMetrics (DG候选 top-K) 展示有区分度的 top-K 排名能力。
+  const useExpanded = tab === 'AO' && data.expandedMetrics != null
+  const displayMetrics = useExpanded ? data.expandedMetrics! : metrics
+  const metricsLabel = useExpanded ? 'Top-K 候选扩展' : undefined
+
   const trainData = useMemo(
     () =>
       logs.steps.map((s) => {
@@ -72,10 +78,10 @@ export function Dashboard() {
   )
 
   const kCurveData = [
-    { k: 1, HR: metrics.hr1, NDCG: metrics.ndcg1 },
-    { k: 5, HR: metrics.hr5, NDCG: metrics.ndcg5 },
-    { k: 10, HR: metrics.hr10, NDCG: metrics.ndcg10 },
-    { k: 20, HR: metrics.hr20, NDCG: metrics.ndcg20 },
+    { k: 1, HR: displayMetrics.hr1, NDCG: displayMetrics.ndcg1 },
+    { k: 5, HR: displayMetrics.hr5, NDCG: displayMetrics.ndcg5 },
+    { k: 10, HR: displayMetrics.hr10, NDCG: displayMetrics.ndcg10 },
+    { k: 20, HR: displayMetrics.hr20, NDCG: displayMetrics.ndcg20 },
   ]
 
   const finalLoss = logs.steps[logs.steps.length - 1]?.loss ?? training.finalLoss
@@ -103,11 +109,19 @@ export function Dashboard() {
       </div>
 
       {/* 核心指标卡片 */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MetricCard label="HR@1 命中率" value={metrics.hr1} sub="Top-1" icon={<TrendingUp size={18} />} />
-        <MetricCard label="HR@5 命中率" value={metrics.hr5} sub="Top-5" icon={<TrendingUp size={18} />} />
-        <MetricCard label="NDCG@5" value={metrics.ndcg5} sub="归一化折损" icon={<Activity size={18} />} />
-        <MetricCard label="MRR" value={metrics.mrr} sub="平均倒数排名" icon={<Target size={18} />} />
+      <div className="space-y-2">
+        {metricsLabel && (
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-400" />
+            {metricsLabel}（基于 DG 候选的 top-K 排名评估，体现真实区分度）
+          </div>
+        )}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <MetricCard label="HR@1 命中率" value={displayMetrics.hr1} sub="Top-1" icon={<TrendingUp size={18} />} />
+          <MetricCard label="HR@5 命中率" value={displayMetrics.hr5} sub="Top-5" icon={<TrendingUp size={18} />} />
+          <MetricCard label="NDCG@5" value={displayMetrics.ndcg5} sub="归一化折损" icon={<Activity size={18} />} />
+          <MetricCard label="MRR" value={displayMetrics.mrr} sub="平均倒数排名" icon={<Target size={18} />} />
+        </div>
       </div>
 
       {/* 训练曲线 */}
@@ -174,11 +188,11 @@ export function Dashboard() {
             <tbody>
               <tr className="border-b border-gray-50 bg-blue-50/40">
                 <td className="py-2 text-left font-medium text-blue-700">LLM + 画像</td>
-                <td className="py-2 text-right tabular-nums">{fmt(metrics.hr1)}</td>
-                <td className="py-2 text-right tabular-nums">{fmt(metrics.hr5)}</td>
-                <td className="py-2 text-right tabular-nums">{fmt(metrics.hr10)}</td>
-                <td className="py-2 text-right tabular-nums">{fmt(metrics.hr20)}</td>
-                <td className="py-2 text-right tabular-nums">{fmt(metrics.mrr)}</td>
+                <td className="py-2 text-right tabular-nums">{fmt(displayMetrics.hr1)}</td>
+                <td className="py-2 text-right tabular-nums">{fmt(displayMetrics.hr5)}</td>
+                <td className="py-2 text-right tabular-nums">{fmt(displayMetrics.hr10)}</td>
+                <td className="py-2 text-right tabular-nums">{fmt(displayMetrics.hr20)}</td>
+                <td className="py-2 text-right tabular-nums">{fmt(displayMetrics.mrr)}</td>
               </tr>
               <tr>
                 <td className="py-2 text-left font-medium text-gray-500">DG 基线</td>
