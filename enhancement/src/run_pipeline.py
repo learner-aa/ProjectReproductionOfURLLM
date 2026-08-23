@@ -1,14 +1,16 @@
 """
 主流程编排模块
 
-提供一键运行整个 LLM 增强推荐 pipeline:
-- Stage 1: 数据预处理
-- Stage 2: 物品属性提取
+提供一键运行整个 LLM 增强推荐 pipeline (通用版, 支持 AO/GM):
+- Stage 1: 数据预处理 (解析 DG 产物)
+- Stage 2: 物品属性提取 (复用 DG 预计算)
 - Stage 3: 用户画像构建
-- Stage 4: Instruction 数据构建
-- Stage 5: LLM 微调
-- Stage 6: LLM 推理
-- Stage 7: 评估
+- Stage 4: KNN 用户检索 (论文 §4.2.1)
+- Stage 5: Instruction 数据构建 (含检索用户)
+- Stage 6: LLM 微调
+- Stage 7: LLM 推理
+- Stage 8: Answer Refinement (论文 §4.2.3)
+- Stage 9: 评估
 
 支持:
 - 按阶段运行 (--stage)
@@ -28,7 +30,7 @@ import yaml
 # 将 src 目录加入 path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from data_utils import ensure_dirs, PROJECT_ROOT
+from data_utils import ensure_dirs, set_dataset, get_output_dir, PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +49,7 @@ STAGES = [
 
 
 def load_config(config_path: Optional[str] = None) -> Dict:
-    """加载 pipeline 配置"""
+    """加载 pipeline 配置 (两数据集共用 config/pipeline_config.yaml)"""
     if config_path is None:
         config_path = str(PROJECT_ROOT / "config" / "pipeline_config.yaml")
 
@@ -73,22 +75,18 @@ def run_stage(stage: str, config: Dict):
     if stage == "preprocess":
         from preprocess import preprocess
         preprocess_cfg = config.get("preprocess", {})
-        data_cfg = config.get("data", {})
-        preprocess(
-            review_x_path=data_cfg.get("review_x_path"),
-            review_y_path=data_cfg.get("review_y_path"),
-            meta_x_path=data_cfg.get("meta_x_path"),
-            meta_y_path=data_cfg.get("meta_y_path"),
-            config=preprocess_cfg,
-        )
+        preprocess(config=preprocess_cfg)
 
     elif stage == "extract_attributes":
         from attribute_extraction import run_attribute_extraction
         attr_cfg = config.get("attribute_extraction", {})
-        if not attr_cfg.get("api_key") and attr_cfg.get("backend", "api") == "api":
+        if not attr_cfg.get("use_precomputed") \
+                and not attr_cfg.get("api_key") \
+                and attr_cfg.get("backend", "api") == "api":
             logger.error(
                 "属性提取需要 API key，请在 config/pipeline_config.yaml 中配置 "
-                "attribute_extraction.api_key"
+                "attribute_extraction.api_key, "
+                "或将 attribute_extraction.use_precomputed 置 true 使用 DG 预提取属性"
             )
             return
         run_attribute_extraction(attr_cfg)
@@ -107,22 +105,24 @@ def run_stage(stage: str, config: Dict):
 
     elif stage == "finetune":
         from llm_finetune import train
-        lora_cfg_path = config.get("_lora_config_path",
-                                    str(PROJECT_ROOT / "config" / "lora_config.yaml"))
+        lora_cfg_path = PROJECT_ROOT / "config" / "lora_config.yaml"
         lora_cfg = {}
-        if Path(lora_cfg_path).exists():
+        if lora_cfg_path.exists():
             with open(lora_cfg_path) as f:
                 lora_cfg = yaml.safe_load(f) or {}
+        else:
+            logger.warning(f"lora_config 不存在: {lora_cfg_path}, 使用默认参数")
         train(lora_cfg)
 
     elif stage == "inference":
         from llm_inference import run_inference
-        lora_cfg_path = config.get("_lora_config_path",
-                                    str(PROJECT_ROOT / "config" / "lora_config.yaml"))
+        lora_cfg_path = PROJECT_ROOT / "config" / "lora_config.yaml"
         lora_cfg = {}
-        if Path(lora_cfg_path).exists():
+        if lora_cfg_path.exists():
             with open(lora_cfg_path) as f:
                 lora_cfg = yaml.safe_load(f) or {}
+        else:
+            logger.warning(f"lora_config 不存在: {lora_cfg_path}, 使用默认参数")
         run_inference(config=lora_cfg)
 
     elif stage == "refine_answers":
@@ -182,12 +182,6 @@ def main():
         help="配置文件路径 (默认: config/pipeline_config.yaml)",
     )
     parser.add_argument(
-        "--lora-config",
-        type=str,
-        default=None,
-        help="LoRA 配置文件路径 (默认: config/lora_config.yaml)",
-    )
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="只打印将要执行的阶段，不实际运行",
@@ -195,29 +189,32 @@ def main():
 
     args = parser.parse_args()
 
-    # 设置日志
+    # 确保目录存在 (默认 AO, set_dataset 后会按新数据集再次创建子目录)
+    ensure_dirs()
+
+    # 加载配置
+    config = load_config(args.config)
+
+    # 设置数据集上下文 (AO / GM)
+    ds_cfg = config.get("dataset", {})
+    set_dataset(ds_cfg.get("name", "AO"), ds_cfg.get("dg_root"))
+
+    # 数据集切换后, 确保对应子目录存在
+    ensure_dirs()
+
+    # 设置日志 (在 set_dataset 之后, pipeline.log 写入对应数据集目录)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
         handlers=[
             logging.StreamHandler(),
             logging.FileHandler(
-                str(PROJECT_ROOT / "outputs" / "pipeline.log"),
+                str(get_output_dir() / "pipeline.log"),
                 encoding="utf-8",
                 mode="a",
             ),
         ],
     )
-
-    # 确保目录存在
-    ensure_dirs()
-
-    # 加载配置
-    config = load_config(args.config)
-
-    # 设置 LoRA 配置路径 (用于 finetune/inference 阶段)
-    if args.lora_config:
-        config["_lora_config_path"] = args.lora_config
 
     # 确定要执行的阶段
     if args.stage:

@@ -14,9 +14,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import torch
-
-from data_utils import OUTPUT_DIR, PROCESSED_DIR, DATASET_SUFFIX, ensure_dirs
+from data_utils import get_output_dir, get_processed_dir, ensure_dirs
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_LORA_CONFIG = {
     "model": {
-        "base_model": "meta-llama/Llama-2-7b-chat-hf",
+        "base_model": "meta-llama/Llama-2-7b-hf",   # base 版, 必须与推理一致; 实际路径见 lora_config.yaml
         "lora_r": 8,
         "lora_alpha": 16,
         "lora_dropout": 0.05,
@@ -49,8 +47,8 @@ DEFAULT_LORA_CONFIG = {
         "save_total_limit": 3,
     },
     "data": {
-        "train_file": f"train_instructions{DATASET_SUFFIX}.json",
-        "valid_file": f"valid_instructions{DATASET_SUFFIX}.json",
+        "train_file": "train_instructions.json",
+        "valid_file": "valid_instructions.json",
     },
 }
 
@@ -141,18 +139,36 @@ def load_model_and_tokenizer(model_config: Dict, training_config: Dict):
         tokenizer.pad_token = tokenizer.eos_token
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    # 加载模型
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model,
-        torch_dtype=torch.float16,
-        device_map="auto",
-        trust_remote_code=True,
-    )
+    # 4bit QLoRA 配置 (7B 模型在 24GB 显存上必须用 4bit 量化)
+    use_4bit = training_config.get("load_in_4bit", True)
+    use_grad_ckpt = training_config.get("gradient_checkpointing", True)
 
-    # 启用梯度检查点以节省显存
-    model.gradient_checkpointing_enable()
-    model.enable_input_require_grads()
-    model.config.use_cache = False
+    load_kwargs = dict(device_map="auto", trust_remote_code=True)
+    if use_4bit:
+        import torch
+        from transformers import BitsAndBytesConfig
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_use_double_quant=True,
+        )
+        load_kwargs["quantization_config"] = bnb_config
+        load_kwargs["torch_dtype"] = torch.float16
+        logger.info("已启用 4bit QLoRA 量化 (nf4, compute_dtype=fp16)")
+    else:
+        load_kwargs["torch_dtype"] = "auto"
+
+    # 加载模型
+    model = AutoModelForCausalLM.from_pretrained(base_model, **load_kwargs)
+
+    # 准备模型 (梯度检查点等)
+    model = prepare_model_for_kbit_training(
+        model, use_gradient_checkpointing=use_grad_ckpt
+    )
+    if use_grad_ckpt:
+        model.gradient_checkpointing_enable()
+        model.enable_input_require_grads()
 
     # 应用 LoRA
     lora_config = LoraConfig(
@@ -211,11 +227,11 @@ def train(config: Optional[Dict] = None):
     # 加载数据
     max_seq_len = training_config.get("max_seq_length", 1024)
 
-    train_file = str(PROCESSED_DIR / data_config["train_file"])
+    train_file = str(get_processed_dir() / data_config["train_file"])
     train_data = load_instruction_dataset(train_file, tokenizer, max_seq_len)
 
     valid_data = None
-    valid_file = str(PROCESSED_DIR / data_config.get("valid_file", ""))
+    valid_file = str(get_processed_dir() / data_config.get("valid_file", ""))
     if Path(valid_file).exists():
         valid_data = load_instruction_dataset(valid_file, tokenizer, max_seq_len)
 
@@ -232,7 +248,7 @@ def train(config: Optional[Dict] = None):
     eval_dataset = SimpleDataset(valid_data) if valid_data else None
 
     # 训练参数
-    save_dir = str(OUTPUT_DIR / f"lora_weights{DATASET_SUFFIX}")
+    save_dir = str(get_output_dir() / "lora_weights")
     training_args = TrainingArguments(
         output_dir=save_dir,
         num_train_epochs=training_config.get("num_epochs", 3),
@@ -247,17 +263,16 @@ def train(config: Optional[Dict] = None):
         save_steps=training_config.get("save_steps", 200),
         eval_steps=training_config.get("eval_steps", 200),
         save_total_limit=training_config.get("save_total_limit", 3),
-        eval_strategy="steps" if eval_dataset else "no",
+        evaluation_strategy="steps" if eval_dataset else "no",
         save_strategy="steps",
         load_best_model_at_end=eval_dataset is not None,
-        logging_dir=str(OUTPUT_DIR / "logs"),
+        logging_dir=str(get_output_dir() / "logs"),
         report_to=["tensorboard"],
         dataloader_pin_memory=True,
         remove_unused_columns=False,
     )
 
-    # Trainer
-    from transformers import Trainer, TrainingArguments
+    # 早停回调
     callbacks = []
     early_patience = training_config.get("early_stopping_patience")
     if early_patience and eval_dataset:
@@ -266,14 +281,18 @@ def train(config: Optional[Dict] = None):
             early_stopping_patience=early_patience,
             early_stopping_threshold=training_config.get("early_stopping_threshold", 0.0),
         ))
-        logger.info(f"启用早停: patience={early_patience}, threshold={training_config.get('early_stopping_threshold', 0.0)}")
+        logger.info(
+            f"启用早停: patience={early_patience}, "
+            f"threshold={training_config.get('early_stopping_threshold', 0.0)}"
+        )
 
+    # Trainer
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        processing_class=tokenizer,
+        tokenizer=tokenizer,
         callbacks=callbacks,
     )
 
@@ -289,7 +308,7 @@ def train(config: Optional[Dict] = None):
     trainer.train()
 
     # 保存最终模型
-    final_path = str(OUTPUT_DIR / f"lora_weights{DATASET_SUFFIX}" / "final")
+    final_path = str(get_output_dir() / "lora_weights" / "final")
     trainer.save_model(final_path)
     tokenizer.save_pretrained(final_path)
 
@@ -304,15 +323,11 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     import yaml
 
-    # 根据 DATASET_SUFFIX 加载对应配置文件
-    suffix = os.environ.get("DATASET_SUFFIX", "")
-    config_name = f"lora_config{suffix}.yaml"
-    config_path = Path(__file__).parent.parent / "config" / config_name
+    config_path = Path(__file__).parent.parent / "config" / "lora_config.yaml"
     if config_path.exists():
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
-        logger.info(f"已加载配置: {config_path}")
         train(cfg)
     else:
-        logger.warning(f"配置文件不存在: {config_path}, 使用默认配置")
+        logger.info("使用默认配置训练")
         train()

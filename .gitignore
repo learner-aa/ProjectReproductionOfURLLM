@@ -10,10 +10,8 @@ webapp/dist/
 *.log
 __pycache__/
 *.pyc
-enhancement/outputs/lora_weights/runs/
-enhancement/outputs/lora_weights_AO/runs/
-enhancement/outputs/lora_weights/training_args.bin
-enhancement/outputs/lora_weights_AO/final/training_args.bin
+enhancement/outputs/**/runs/
+enhancement/outputs/**/training_args.bin
 
 # === >100M 大文件(GitHub 单文件限制,通过 Release 分发) ===
 **/adapter_model.safetensors
@@ -21,7 +19,8 @@ DG_Final/**/*.npy
 DG_Final/**/*.pt
 *.pt
 enhancement/*.npy
-enhancement/saved_models/*.npy
+enhancement/saved_models/**/*.npy
+enhancement/data/processed/GM/*.json
 
 # === 压缩包与系统文件 ===
 *.tar.gz
@@ -30,14 +29,17 @@ enhancement/saved_models/*.npy
 
 # === 备份目录 ===
 backup_*/
+*.bak.*/
 
 # === 备份文件 ===
 *.backup.json
 *.bak2.json
 *.pre_retrieval.json
 
+# === item prompt 中间产物(可由 pipeline 重新生成) ===
+DG_Final/AO/item_prompt_AO/
+
 # === 日志文件 ===
 enhancement/logs_*.txt
-
-# === 本地文档(不上传) ===
-SHARING_GUIDE.md
+enhancement/outputs/**/logs_*.txt
+webapp/logs_*.txt

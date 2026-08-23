@@ -21,10 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from data_utils import (
-    OUTPUT_DIR,
-    PROCESSED_DIR,
-    PROJECT_ROOT,
-    DATASET_SUFFIX,
+    get_output_dir,
     load_dg_scores,
     load_dg_candidates,
     load_id_mapping,
@@ -114,7 +111,17 @@ class BM25Grounding:
         if not llm_output.strip():
             return []
 
-        # BM25 或 token overlap 检索 top-m 候选
+        # 先尝试精确匹配
+        output_lower = llm_output.strip().lower()
+        if output_lower in self._title_to_item_id:
+            item_id = self._title_to_item_id[output_lower]
+            return [{
+                "item_id": item_id,
+                "title": self.item_metadata[item_id].get("title", ""),
+                "score": 1.0,
+            }]
+
+        # BM25 或 token overlap
         query_tokens = self._tokenize(llm_output)
         if not query_tokens:
             return []
@@ -133,26 +140,6 @@ class BM25Grounding:
                 "title": self.titles[idx],
                 "score": float(scores[idx]),
             })
-
-        # 精确匹配加分: 若 LLM 输出精确匹配某标题,将其置顶并给最高分
-        output_lower = llm_output.strip().lower()
-        if output_lower in self._title_to_item_id:
-            exact_id = self._title_to_item_id[output_lower]
-            exact_title = self.item_metadata[exact_id].get("title", "")
-            # 检查精确匹配项是否已在结果中
-            found = False
-            for r in results:
-                if r["item_id"] == exact_id:
-                    r["score"] = max(r["score"], 1.0)
-                    found = True
-                    break
-            if not found:
-                results.insert(0, {
-                    "item_id": exact_id,
-                    "title": exact_title,
-                    "score": 1.0,
-                })
-                results = results[:top_m]  # 保持 top_m 数量
 
         return results
 
@@ -178,8 +165,8 @@ def check_domain(
     grounded_items: List[Dict[str, Any]],
     target_domain: str,
     item_metadata: Dict[str, Dict],
-    domain_x_name: str = "Entertainment",
-    domain_y_name: str = "Education",
+    domain_x_name: str = "Art",
+    domain_y_name: str = "Office",
 ) -> bool:
     """
     检查 grounding 结果是否属于目标域。
@@ -199,28 +186,24 @@ def check_domain(
     if not grounded_items:
         return False
 
-    # 统一域名: AO 数据集里 Entertainment 标签 = Art 物品, Education 标签 = Office 物品
-    # (convert_dg_data.py 用 Entertainment/Education, build_instruction_data.py 映射为 Art/Office)
-    # 这里统一归一化为 Art / Office 再比较
+    # 统一域名比较
     def normalize_domain(d: str) -> str:
         d = d.lower().strip()
-        if d in ("art", "entertainment"):
-            return "Art"
-        if d in ("office", "education"):
-            return "Office"
-        return d.capitalize() if d else d
+        if d in (domain_x_name.lower(), "x"):
+            return "X"
+        if d in (domain_y_name.lower(), "y"):
+            return "Y"
+        return d
 
     target_norm = normalize_domain(target_domain)
 
-    # 放宽 OOD 判定: 只检查 top-1 是否在目标域 (论文 Algorithm 1 是检查 max_I/min_I, 等价于 top-1)
-    # 之前检查 top-m 中任一物品错域就判 OOD, 过于严格导致 50% OOD rate
-    best = grounded_items[0]
-    item_id = best.get("item_id", "")
-    meta = item_metadata.get(item_id, {})
-    item_domain = normalize_domain(meta.get("domain", ""))
+    for item in grounded_items:
+        item_id = item.get("item_id", "")
+        meta = item_metadata.get(item_id, {})
+        item_domain = normalize_domain(meta.get("domain", ""))
 
-    if item_domain and item_domain != target_norm:
-        return False
+        if item_domain and item_domain != target_norm:
+            return False
 
     return True
 
@@ -229,172 +212,24 @@ def check_domain(
 # DG 模型回退
 # ============================================================
 
-def _load_dg_index_to_title() -> Dict[int, str]:
-    """建立 DG dg_index → item_title 映射 (从原论文 CSV)。
-
-    CSV 格式: asin, title, dg_index
-    Art 物品 dg_index 范围: 0 ~ 18638
-    Office 物品 dg_index 范围: 18639 ~ 38395
-    """
-    cache = getattr(_load_dg_index_to_title, "_cache", None)
-    if cache is not None:
-        return cache
-
-    import csv
-    dg_root = PROJECT_ROOT.parent / "DG_Final" / "AO"
-    csv_paths = [dg_root / "item_listA_F.csv", dg_root / "item_listO_AA_F.csv"]
-    mapping = {}
-    for p in csv_paths:
-        if not p.exists():
-            logger.warning(f"CSV 不存在: {p}")
-            continue
-        with open(p, encoding="utf-8") as f:
-            next(f, None)  # 跳过表头
-            for row in csv.reader(f):
-                if len(row) < 3:
-                    continue
-                try:
-                    dg_idx = int(row[2].strip())
-                    title = row[1].strip()
-                    mapping[dg_idx] = title
-                except (ValueError, IndexError):
-                    continue
-    logger.info(f"已加载 dg_index → title 映射: {len(mapping)} 条")
-    _load_dg_index_to_title._cache = mapping
-    return mapping
-
-
-def _load_uid_to_dg_row() -> Dict[str, int]:
-    """建立 uid → DG candidate 矩阵的 Art 行索引映射。
-
-    test_F2.txt 每用户有 2 行 (Art 查询 + Office 查询)。
-    pipeline test_AO.json 的 target_domain 全是 Art, 所以取 Art 行。
-
-    Art 查询的行: ground truth dg_index < M_length (18639)
-    """
-    cache = getattr(_load_uid_to_dg_row, "_cache", None)
-    if cache is not None:
-        return cache
-
-    dg_root = PROJECT_ROOT.parent / "DG_Final" / "AO"
-    test_f2_path = dg_root / "test_F2.txt"
-    M_LENGTH = 18639  # Art 物品数
-
-    uid_to_row = {}
-    if not test_f2_path.exists():
-        logger.warning(f"test_F2.txt 不存在: {test_f2_path}")
-        _load_uid_to_dg_row._cache = uid_to_row
-        return uid_to_row
-
-    with open(test_f2_path, encoding="utf-8") as f:
-        for i, line in enumerate(f):
-            parts = line.strip().split("\t")
-            if len(parts) < 3:
-                continue
-            uid = parts[0]
-            last = parts[-1].split("|")
-            if len(last) < 1:
-                continue
-            try:
-                gt_dg_idx = int(last[0])
-            except ValueError:
-                continue
-            # Art 查询行: ground truth 是 Art 物品 (dg_index < M_LENGTH)
-            if gt_dg_idx < M_LENGTH:
-                uid_to_row[uid] = i
-
-    logger.info(f"已加载 uid → DG Art行 映射: {len(uid_to_row)} 个用户")
-    _load_uid_to_dg_row._cache = uid_to_row
-    return uid_to_row
-
-
 def dg_fallback(
     test_user_index: int,
     dg_scores: Optional[np.ndarray] = None,
     id_mapping: Optional[Dict[str, Any]] = None,
     item_metadata: Optional[Dict[str, Dict]] = None,
-    top_k: int = 20,
-    user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """从 DG 模型 candidate 矩阵获取推荐结果作为回退 (论文中的 I₁)。
-
-    修复: AO 数据集使用 candidate 矩阵 (值=CSV dg_index),
-    而非 best_trte 矩阵 (列=DG 内部索引, 无法直接映射)。
+    """
+    从 DG 模型评分矩阵获取推荐结果作为回退 (论文中的 I₁)。
 
     Args:
-        test_user_index: pipeline test 用户索引 (0-based)
-        dg_scores: 保留参数, 不再使用 (改用 candidate)
-        id_mapping: 保留参数, 不再使用
-        item_metadata: 保留参数, 不再使用
-        top_k: 返回的候选数量
-        user_id: 用户 ID (如 "8000"), 用于映射到 DG candidate 的 Art 行
+        test_user_index: 测试用户索引
+        dg_scores: (num_test_users, num_items) 评分矩阵
+        id_mapping: ID 映射表
+        item_metadata: 物品元数据
 
     Returns:
-        {"item_id": str, "title": str, "score": float,
-         "top_k_titles": [str, ...], "top_k_ids": [str, ...]}
+        {"item_id": str, "title": str, "score": float}
     """
-    # GM 数据集走原逻辑 (best_trte 矩阵 + id_mapping)
-    if not DATASET_SUFFIX:
-        return _dg_fallback_gm(
-            test_user_index, dg_scores, id_mapping, item_metadata, top_k
-        )
-
-    # AO 数据集: 用 candidate 矩阵 + CSV 映射
-    candidates = load_dg_candidates()  # (2000, 10000)
-    dg_idx_to_title = _load_dg_index_to_title()
-    uid_to_row = _load_uid_to_dg_row()
-
-    # 通过 user_id 映射到 candidate 的 Art 行
-    if user_id is None:
-        logger.warning("AO dg_fallback 需要 user_id 参数")
-        return {"item_id": "", "title": "", "score": 0.0,
-                "top_k_titles": [], "top_k_ids": []}
-
-    dg_row = uid_to_row.get(str(user_id))
-    if dg_row is None:
-        logger.warning(f"uid={user_id} 未找到对应的 DG Art 行")
-        return {"item_id": "", "title": "", "score": 0.0,
-                "top_k_titles": [], "top_k_ids": []}
-
-    if dg_row >= candidates.shape[0]:
-        logger.warning(
-            f"dg_row {dg_row} 超出 candidate 矩阵范围 ({candidates.shape[0]})"
-        )
-        return {"item_id": "", "title": "", "score": 0.0,
-                "top_k_titles": [], "top_k_ids": []}
-
-    # candidate 行的值已经是 CSV dg_index, 直接取 top-K
-    top_k_dg_indices = candidates[dg_row][:top_k]
-
-    top_k_titles = []
-    top_k_ids = []
-    for dg_idx in top_k_dg_indices:
-        dg_idx_int = int(dg_idx)
-        title = dg_idx_to_title.get(dg_idx_int, str(dg_idx_int))
-        top_k_titles.append(title)
-        top_k_ids.append(str(dg_idx_int))
-
-    # top-1 作为最终推荐
-    top_idx = int(top_k_dg_indices[0])
-    title = dg_idx_to_title.get(top_idx, str(top_idx))
-
-    return {
-        "item_id": str(top_idx),
-        "title": title,
-        "score": 1.0 - top_idx / 40000.0,  # 占位分数
-        "top_k_titles": top_k_titles,
-        "top_k_ids": top_k_ids,
-    }
-
-
-def _dg_fallback_gm(
-    test_user_index: int,
-    dg_scores: Optional[np.ndarray],
-    id_mapping: Optional[Dict[str, Any]],
-    item_metadata: Optional[Dict[str, Dict]],
-    top_k: int,
-) -> Dict[str, Any]:
-    """GM 数据集的 DG 回退 (原逻辑)。"""
     if dg_scores is None:
         dg_scores = load_dg_scores()
     if id_mapping is None:
@@ -407,31 +242,20 @@ def _dg_fallback_gm(
             f"test_user_index {test_user_index} 超出评分矩阵范围 "
             f"({dg_scores.shape[0]})"
         )
-        return {"item_id": "", "title": "", "score": 0.0,
-                "top_k_titles": [], "top_k_ids": []}
+        return {"item_id": "", "title": "", "score": 0.0}
 
     user_scores = dg_scores[test_user_index]
-    top_k_indices = np.argsort(user_scores)[::-1][:top_k]
+    top_idx = int(np.argmax(user_scores))
 
     idx_to_id = id_mapping.get("index_to_item_id", {})
-    top_k_titles = []
-    top_k_ids = []
-    for idx in top_k_indices:
-        iid = idx_to_id.get(str(int(idx)), str(int(idx)))
-        title = item_metadata.get(iid, {}).get("title", iid)
-        top_k_titles.append(title)
-        top_k_ids.append(iid)
-
-    top_idx = int(top_k_indices[0])
-    item_id = idx_to_id.get(str(top_idx), str(top_idx))
+    # 强制 str: id_mapping 的 value 可能是 int, 而 item_metadata 的 key 是 str, 类型不匹配会导致 title 找不到,回退到 int item_id
+    item_id = str(idx_to_id.get(str(top_idx), str(top_idx)))
     title = item_metadata.get(item_id, {}).get("title", item_id)
 
     return {
         "item_id": item_id,
         "title": title,
         "score": float(user_scores[top_idx]),
-        "top_k_titles": top_k_titles,
-        "top_k_ids": top_k_ids,
     }
 
 
@@ -464,14 +288,14 @@ def refine_predictions(
     cfg = config or {}
     ref_cfg = cfg.get("refinement", {})
     domain_cfg = cfg.get("domains", {})
-    domain_x = domain_cfg.get("x", "Entertainment")
-    domain_y = domain_cfg.get("y", "Education")
+    domain_x = domain_cfg.get("x", "Art")
+    domain_y = domain_cfg.get("y", "Office")
     top_m = ref_cfg.get("top_m", 5)
     use_bm25 = ref_cfg.get("use_bm25", True)
     fallback_enabled = ref_cfg.get("fallback_enabled", True)
 
     # 加载数据
-    pred_file = OUTPUT_DIR / "predictions" / f"test_predictions{DATASET_SUFFIX}.json"
+    pred_file = get_output_dir() / "predictions" / "test_predictions.json"
     if not pred_file.exists():
         logger.error(f"推理结果不存在: {pred_file}")
         return []
@@ -493,19 +317,6 @@ def refine_predictions(
             logger.warning("DG 评分矩阵不存在，域外回退将跳过")
             fallback_enabled = False
 
-    # 加载 AO DG 候选矩阵 (用于 OOD 样本的 top-K)
-    dg_candidates = None
-    if DATASET_SUFFIX == "_AO":
-        cand_path = OUTPUT_DIR.parent / "t4_G2_final_DGresult_test_candidate_AO.npy"
-        if cand_path.exists():
-            dg_candidates = np.load(str(cand_path))
-            # 去重: 原论文每用户2行,取偶数行
-            if dg_candidates.shape[0] % 2 == 0:
-                dg_candidates = dg_candidates[0::2]
-            logger.info(f"AO DG 候选矩阵已加载: {dg_candidates.shape} (去重后)")
-        else:
-            logger.warning(f"AO DG 候选矩阵不存在: {cand_path}")
-
     # 逐条精炼
     refined_results = []
     stats = {"total": 0, "grounded": 0, "in_domain": 0, "fallback": 0}
@@ -517,15 +328,12 @@ def refine_predictions(
 
         new_result = dict(result)  # 复制原始结果
 
-        # Step 1: BM25 grounding (top_m=20 以保存 top-K 候选)
-        grounded = grounder.ground(llm_output, top_m=max(top_m, 20))
+        # Step 1: BM25 grounding
+        grounded = grounder.ground(llm_output, top_m=top_m)
 
         if grounded:
             best = grounded[0]
             stats["grounded"] += 1
-
-            # 保存 top-20 候选标题列表 (用于评估 HR@K)
-            new_result["top_k_candidates"] = [g["title"] for g in grounded[:20]]
 
             # Step 2: 域检查
             in_domain = check_domain(
@@ -542,21 +350,17 @@ def refine_predictions(
                 new_result["refined"] = True
                 stats["in_domain"] += 1
             elif fallback_enabled:
-                # 域外: DG 回退
-                # AO: 需要 user_id 来映射到 DG candidate 的 Art 行
-                uid = result.get("user_id", "")
+                # 域外: DG 回退 (按 DG 特征行号定位, 缺省回退到列表下标)
+                dg_index = new_result.get("dg_index")
                 dg_result = dg_fallback(
-                    idx, dg_scores, id_mapping, item_metadata, top_k=20,
-                    user_id=str(uid) if uid else None,
+                    dg_index if dg_index is not None else idx,
+                    dg_scores, id_mapping, item_metadata,
                 )
                 new_result["prediction_original"] = llm_output
                 new_result["prediction"] = dg_result["title"]
                 new_result["grounded_item_id"] = dg_result["item_id"]
                 new_result["fallback_to_dg"] = True
                 new_result["refined"] = True
-                # 用 DG candidate 返回的 top-K 候选
-                if dg_result["top_k_titles"]:
-                    new_result["top_k_candidates"] = dg_result["top_k_titles"]
                 stats["fallback"] += 1
             else:
                 new_result["refined"] = False
@@ -567,7 +371,7 @@ def refine_predictions(
         refined_results.append(new_result)
 
     # 保存
-    output_file = OUTPUT_DIR / "refined_predictions" / f"refined_predictions{DATASET_SUFFIX}.json"
+    output_file = get_output_dir() / "refined_predictions" / "refined_predictions.json"
     save_json(refined_results, output_file)
 
     # 统计
@@ -590,17 +394,10 @@ if __name__ == "__main__":
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
     import yaml
-    import os
 
-    # 根据 DATASET_SUFFIX 加载对应配置文件
-    suffix = os.environ.get("DATASET_SUFFIX", "")
-    config_name = f"pipeline_config{suffix}.yaml"
-    config_path = Path(__file__).parent.parent / "config" / config_name
+    config_path = Path(__file__).parent.parent / "config" / "pipeline_config.yaml"
     cfg = {}
     if config_path.exists():
         with open(config_path) as f:
             cfg = yaml.safe_load(f) or {}
-        logger.info(f"已加载配置: {config_path}")
-    else:
-        logger.warning(f"配置文件不存在: {config_path}, 使用默认配置")
     refine_predictions(cfg)

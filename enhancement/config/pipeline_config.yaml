@@ -1,47 +1,56 @@
 # ============================================================
-# URLLM 增强推荐 Pipeline 全局配置
+# URLLM 增强推荐 Pipeline 全局配置 (通用版)
+#
+# 本配置适配 DG 双图模型 (DG_Final) 的产物，支持两个数据集:
+#   - AO (Art → Office):   8000 训练用户 × 2 行, 2000 测试用户
+#   - GM (Movie → Game):   35941 训练用户 × 1 行, 3601 测试用户
+#
+# 两数据集共用本配置: 切换时改 dataset.name / domains / *_file 即可,
+# data/processed 与 outputs 由 set_dataset 自动切到对应子目录 (物理隔离)。
 # ============================================================
 
-# 数据集路径 (预处理阶段使用)
-data:
-  # 原始交互数据 (Amazon JSON Lines 格式)
-  # 请将下载的 Amazon Entertainment-Education 数据放入 data/raw/ 目录
-  review_x_path: "data/raw/Entertainment_reviews.json"
-  review_y_path: "data/raw/Education_reviews.json"
-  # 物品元数据 (可选, 提高属性提取质量)
-  meta_x_path: "data/raw/Entertainment_meta.json"
-  meta_y_path: "data/raw/Education_meta.json"
+# 数据集选择
+dataset:
+  name: "AO"                      # "AO" 或 "GM"
+  dg_root: "/root/autodl-tmp/URLLM-project/DG_Final"   # DG 模型根目录 (含 AO/ GM/ 子目录)
 
-# 域定义
+# 域定义 (X = 源域, Y = 目标域)
 domains:
-  x: "Entertainment"
-  y: "Education"
+  x: "Art"                        # AO: Art (Arts,Crafts&Sewing) | GM: Movie
+  y: "Office"                     # AO: Office (Office Products)  | GM: Game
 
 # 预处理配置
 preprocess:
-  min_interactions: 3          # 最少交互次数过滤
-  max_seq_len: 15              # 最大序列长度 (与 DG 模型一致)
-  random_seed: 2040            # 随机种子 (与 DG 模型一致)
-  domain_x_name: "Entertainment"
-  domain_y_name: "Education"
+  min_interactions: 3            # 最少交互次数过滤
+  max_seq_len: 15                # 最大序列长度 (与 DG 模型一致)
+  random_seed: 2040              # 随机种子
+  # DG 数据文件名 (自动匹配 {dataset}/{name}_{split}.txt)
+  train_file: "train_F2.txt"     # AO; GM 用 "train_F.txt"
+  valid_file: "valid_F2.txt"     # AO; GM 用 "valid_F.txt"
+  test_file: "test_F2.txt"       # AO; GM 用 "test_F.txt"
 
 # 物品属性提取配置
 attribute_extraction:
-  # 方法: "api" (调用LLM API), "local" (本地模型), "convert" (从已有item_prompt转换)
-  backend: "convert"
-  # --- API 模式 ---
+  backend: "api"                 # "api" 或 "local"
+  # API 模式
   api_key: "your-api-key-here"
   base_url: "https://api.openai.com/v1"
   model: "gpt-3.5-turbo-0613"
-  # --- 本地模式 ---
+  # 本地模式 (backend=local 时使用)
   model_name: "meta-llama/Llama-2-7b-chat-hf"
   device: "cuda"
-  # --- 转换模式 (使用已生成的DeepSeek V4结果) ---
-  item_prompt_dataset: "GM"    # "GM" (Game-Movie) 或 "AO" (Art-Office)
   # 通用
-  language: "en"               # "en" 或 "zh"
+  language: "en"                 # "en" 或 "zh"
+  # DG 已用 LLM 提取过属性 (DG_src/dataset/item_prompt_{AO|GM}/*_exat_*.json)。
+  # 置 true 时直接从该产物读取, 跳过 API 调用。
+  use_precomputed: true
 
 # Instruction 数据构建配置
 instruction:
-  template_type: "profile"     # "base" | "profile" | "cot"
-  output_format: "alpaca"      # "alpaca" | "chatml"
+  template_type: "profile"       # "base" | "profile" | "cot" | "retrieval"
+  output_format: "alpaca"        # "alpaca" | "chatml"
+
+# KNN 用户检索配置
+retrieval:
+  k_train: 2                     # 训练集检索数 (排除自身)
+  k_test: 3                      # 验证/测试集检索数

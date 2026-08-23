@@ -160,11 +160,6 @@ def format_interaction_sequence(
     """
     display_seq = sequence[-max_display:]
     lines = []
-    # 域标签映射: AO 数据集中 GM 标签混用 (Entertainment=Art, Education=Office)
-    domain_label_map = {
-        "Entertainment": "Art",
-        "Education": "Office",
-    }
     for item in display_seq:
         if isinstance(item, dict):
             item_id = item["item_id"]
@@ -172,9 +167,6 @@ def format_interaction_sequence(
         else:
             item_id = item
             domain = item_metadata.get(item_id, {}).get("domain", "?")
-
-        # 修正域标签
-        domain = domain_label_map.get(domain, domain)
 
         title = item_metadata.get(item_id, {}).get("title", item_id)
         lines.append(f"  [{domain}] {title}")

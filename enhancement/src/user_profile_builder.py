@@ -16,9 +16,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from data_utils import (
-    PROCESSED_DIR,
+    get_processed_dir,
     load_dg_features,
-    load_dg_scores,
     load_json,
     save_json,
     cosine_similarity,
@@ -40,8 +39,8 @@ logger = logging.getLogger(__name__)
 
 def build_behavior_profile(
     user_seq: List[Dict],
-    domain_x_name: str = "Entertainment",
-    domain_y_name: str = "Education",
+    domain_x_name: str = "Art",
+    domain_y_name: str = "Office",
 ) -> Dict[str, Any]:
     """
     从交互序列构建行为画像。
@@ -143,47 +142,35 @@ def build_semantic_profile(
 def build_embedding_profile(
     user_fea_x: np.ndarray,
     user_fea_y: np.ndarray,
-    item_fea_x: np.ndarray,
-    item_fea_y: np.ndarray,
-    id_mapping: Dict[str, Any],
+    train_user_x: np.ndarray,
+    train_user_y: np.ndarray,
+    train_user_ids: List[str],
+    interactions: Dict[str, List],
     item_metadata: Dict[str, Dict],
     top_k: int = 5,
+    max_items_per_user: int = 3,
 ) -> Dict[str, Any]:
     """
     将 DG 656维用户特征向量转化为文本描述。
 
-    策略: 用用户向量与物品向量做余弦相似度，取 top-k 近邻物品的标题。
+    策略: DG train 特征每一行是「用户向量」, 故用目标用户向量与训练用户向量
+    做余弦相似度, 取 top-k 相似用户, 以其交互物品作为该用户的偏好线索。
+    (修正: 不再把 DG 特征当作物品特征)
 
     Args:
         user_fea_x: (656,) X域用户特征
         user_fea_y: (656,) Y域用户特征
-        item_fea_x: (num_items, 656) X域物品特征
-        item_fea_y: (num_items, 656) Y域物品特征
-        id_mapping: ID 映射表
+        train_user_x: (num_train_rows, 656) X域训练用户向量
+        train_user_y: (num_train_rows, 656) Y域训练用户向量
+        train_user_ids: 训练用户向量每行对应的 user_id
+        interactions: {user_id: [item_id, ...]}
         item_metadata: 物品元数据
-        top_k: 近邻物品数
+        top_k: 近邻用户数
+        max_items_per_user: 每个相似用户最多取多少个交互物品
 
     Returns:
         特征画像字典
     """
-    idx_to_id = id_mapping.get("index_to_item_id", {})
-
-    # X 域近邻物品
-    top_x_idx, top_x_scores = find_topk_similar(user_fea_x, item_fea_x, k=top_k)
-    top_x_items = []
-    for idx, score in zip(top_x_idx, top_x_scores):
-        item_id = idx_to_id.get(str(idx), str(idx))
-        title = item_metadata.get(item_id, {}).get("title", item_id)
-        top_x_items.append({"item_id": item_id, "title": title, "score": float(score)})
-
-    # Y 域近邻物品
-    top_y_idx, top_y_scores = find_topk_similar(user_fea_y, item_fea_y, k=top_k)
-    top_y_items = []
-    for idx, score in zip(top_y_idx, top_y_scores):
-        item_id = idx_to_id.get(str(idx), str(idx))
-        title = item_metadata.get(item_id, {}).get("title", item_id)
-        top_y_items.append({"item_id": item_id, "title": title, "score": float(score)})
-
     # 向量统计摘要
     def vector_stats(fea: np.ndarray) -> Dict:
         return {
@@ -193,6 +180,24 @@ def build_embedding_profile(
             "min": float(fea.min()),
             "l2_norm": float(np.linalg.norm(fea)),
         }
+
+    def similar_items_of_domain(user_fea, train_fea) -> List[Dict]:
+        top_idx, top_scores = find_topk_similar(user_fea, train_fea, k=top_k)
+        result = []
+        seen_users = set()
+        for idx, score in zip(top_idx, top_scores):
+            uid = train_user_ids[idx] if idx < len(train_user_ids) else str(idx)
+            if uid in seen_users:
+                continue
+            seen_users.add(uid)
+            for iid in (interactions.get(uid) or [])[-max_items_per_user:]:
+                iid = str(iid)
+                title = item_metadata.get(iid, {}).get("title", iid)
+                result.append({"item_id": iid, "title": title, "score": float(score)})
+        return result
+
+    top_x_items = similar_items_of_domain(user_fea_x, train_user_x)
+    top_y_items = similar_items_of_domain(user_fea_y, train_user_y)
 
     return {
         "top_similar_items_x": top_x_items,
@@ -210,8 +215,8 @@ def profile_to_text(
     profile: Dict[str, Any],
     item_metadata: Dict[str, Dict],
     template: str = "detailed",
-    domain_x_name: str = "Entertainment",
-    domain_y_name: str = "Education",
+    domain_x_name: str = "Art",
+    domain_y_name: str = "Office",
 ) -> str:
     """
     将用户画像字典转化为 LLM 可读的文本。
@@ -287,8 +292,8 @@ def build_all_user_profiles(
     item_attributes: Dict[str, Dict],
     id_mapping: Dict[str, Any],
     dg_features: Optional[Dict[str, np.ndarray]] = None,
-    domain_x_name: str = "Entertainment",
-    domain_y_name: str = "Education",
+    domain_x_name: str = "Art",
+    domain_y_name: str = "Office",
     top_k_similar: int = 5,
 ) -> Dict[str, Dict]:
     """
@@ -367,29 +372,31 @@ def build_all_user_profiles(
 
 def build_embedding_profiles_for_test_users(
     dg_features: Dict[str, np.ndarray],
-    id_mapping: Dict[str, Any],
+    train_user_ids: List[str],
+    interactions: Dict[str, List],
     item_metadata: Dict[str, Dict],
     top_k: int = 5,
 ) -> Dict[int, Dict]:
     """
     为测试集用户构建特征画像 (基于 DG 向量)。
 
-    测试用户的 DG 特征存储在 test_x_fea / test_y_fea 中，
-    按行索引对应用户。
+    测试用户的 DG 特征存储在 test_x_fea / test_y_fea 中,
+    行索引 = split 数据的 dg_index。
 
     Args:
         dg_features: load_dg_features() 的返回值
-        id_mapping: ID 映射表
+        train_user_ids: 训练用户向量每行对应的 user_id
+        interactions: {user_id: [item_id, ...]}
         item_metadata: 物品元数据
-        top_k: 近邻数
+        top_k: 近邻用户数
 
     Returns:
-        {test_user_index: embedding_profile_dict}
+        {test_row_index: embedding_profile_dict}
     """
-    test_x = dg_features["test_x_fea"]  # (num_test_users, 656)
+    test_x = dg_features["test_x_fea"]  # (num_test_rows, 656)
     test_y = dg_features["test_y_fea"]
-    item_x = dg_features["train_x_fea"]  # (num_items, 656)
-    item_y = dg_features["train_y_fea"]
+    train_x = dg_features["train_x_fea"]  # (num_train_rows, 656) 用户向量
+    train_y = dg_features["train_y_fea"]
 
     num_test_users = test_x.shape[0]
     logger.info(f"为 {num_test_users} 个测试用户构建特征画像...")
@@ -399,9 +406,10 @@ def build_embedding_profiles_for_test_users(
         ep = build_embedding_profile(
             user_fea_x=test_x[i],
             user_fea_y=test_y[i],
-            item_fea_x=item_x,
-            item_fea_y=item_y,
-            id_mapping=id_mapping,
+            train_user_x=train_x,
+            train_user_y=train_y,
+            train_user_ids=train_user_ids,
+            interactions=interactions,
             item_metadata=item_metadata,
             top_k=top_k,
         )
@@ -427,12 +435,12 @@ def run_profile_building(config: Dict):
     logger.info("=" * 60)
 
     # 加载数据
-    interactions = load_json(PROCESSED_DIR / "interactions.json")
-    item_metadata = load_json(PROCESSED_DIR / "item_metadata.json")
-    id_mapping = load_json(PROCESSED_DIR / "id_mapping.json")
+    interactions = load_json(get_processed_dir() / "interactions.json")
+    item_metadata = load_json(get_processed_dir() / "item_metadata.json")
+    id_mapping = load_json(get_processed_dir() / "id_mapping.json")
 
     # 物品属性 (可选，如未提取则用空字典)
-    attr_path = PROCESSED_DIR / "item_attributes.json"
+    attr_path = get_processed_dir() / "item_attributes.json"
     if attr_path.exists():
         item_attributes = load_json(attr_path)
     else:
@@ -454,25 +462,32 @@ def run_profile_building(config: Dict):
         item_attributes=item_attributes,
         id_mapping=id_mapping,
         dg_features=dg_features,
-        domain_x_name=domain_cfg.get("x", "Entertainment"),
-        domain_y_name=domain_cfg.get("y", "Education"),
+        domain_x_name=domain_cfg.get("x", "Art"),
+        domain_y_name=domain_cfg.get("y", "Office"),
     )
 
     # 保存用户画像
-    save_json(profiles, PROCESSED_DIR / "user_profiles.json")
+    save_json(profiles, get_processed_dir() / "user_profiles.json")
 
     # 为测试用户构建特征画像
     if dg_features is not None:
+        # 训练用户向量每行对应的 user_id (与 DG 特征行对齐)
+        train_path = get_processed_dir() / "train.json"
+        train_data = load_json(train_path) if train_path.exists() else {}
+        train_user_ids = [
+            str(s.get("user_id", "")) for s in train_data.values()
+        ]
         test_embedding_profiles = build_embedding_profiles_for_test_users(
             dg_features=dg_features,
-            id_mapping=id_mapping,
+            train_user_ids=train_user_ids,
+            interactions=interactions,
             item_metadata=item_metadata,
         )
-        save_json(test_embedding_profiles, PROCESSED_DIR / "test_embedding_profiles.json")
+        save_json(test_embedding_profiles, get_processed_dir() / "test_embedding_profiles.json")
 
     logger.info("=" * 60)
     logger.info("用户画像构建完成！")
-    logger.info(f"  画像文件: {PROCESSED_DIR / 'user_profiles.json'}")
+    logger.info(f"  画像文件: {get_processed_dir() / 'user_profiles.json'}")
     logger.info("=" * 60)
 
 

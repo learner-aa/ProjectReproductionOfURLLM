@@ -1,24 +1,38 @@
 """
-原始数据预处理模块
+DG 模型数据预处理模块 (通用版)
 
-将 Amazon Entertainment-Education 跨域数据集解析为统一格式:
-- 用户交互序列
-- 物品元数据
-- ID 映射表
-- train/valid/test 划分 (leave-one-out)
+解析 DG_Final 产物, 使 enhance 管线的 ID 空间与 DG 索引完全对齐:
+
+- 物品清单:   {dataset}/item_list*.csv
+  * 列: idBefore,item_title,idAfter[,item_attribute]
+  * idAfter 即 DG 统一索引空间 (AO: 源 0..18638, 目标 18639..38395; GM: 源 0..71066, 目标 71067..183299)
+- 交互序列:   {dataset}/{train,valid,test}_F*.txt, 物品 id 直接使用 DG 索引
+  * AO 格式: uid\\thistoryCount\\titem|ts|pos...,  目标 = 最后一个物品
+  * GM 格式: uid\\tuser_ts\\titem|ts|ts...,       目标 = ts == user_ts 的物品
+- 物品属性:   DG_src/dataset/item_prompt_{AO|GM}/*_exat_*.json (qqid = DG 索引)
+
+产出 (data/processed/):
+- item_metadata.json   {dg_index: {title, domain, attribute}}
+- item_attributes.json {dg_index: {intro, attributes}}   (从 DG 已产出的 exat 文件读取)
+- id_mapping.json      对齐 DG 索引空间
+- interactions.json    {user_id: [item_id, ...]}  (不含目标物品)
+- train.json / valid.json / test.json
+  键为 sample_id, 值含 {user_id, dg_index, seq, target, domain}
 """
 
+import csv
+import glob
 import json
 import logging
-import os
-import random
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from data_utils import (
-    DATA_DIR, PROCESSED_DIR, RAW_DIR,
-    load_json, save_json, ensure_dirs,
+    get_processed_dir,
+    save_json, ensure_dirs,
+    get_dataset_dir,
+    set_dataset, CURRENT_DATASET, CURRENT_DG_ROOT,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,345 +43,426 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 DEFAULT_CONFIG = {
-    "min_interactions": 3,       # 最少交互次数过滤
+    "min_interactions": 3,       # 最少交互次数过滤 (用户级别)
     "max_seq_len": 15,           # 最大序列长度 (与 DG 模型一致)
-    "random_seed": 2040,         # 随机种子 (与 DG 模型一致)
-    "domain_x_name": "Entertainment",
-    "domain_y_name": "Education",
+    "random_seed": 2040,         # 随机种子
+    "train_file": "train_F2.txt",   # AO 默认; GM 用 train_F.txt
+    "valid_file": "valid_F2.txt",   # AO 默认; GM 用 valid_F.txt
+    "test_file": "test_F2.txt",     # AO 默认; GM 用 test_F.txt
+}
+
+# 各数据集的源域/目标域名称
+DOMAIN_NAMES = {
+    "AO": ("Art", "Office"),
+    "GM": ("Movie", "Game"),
 }
 
 
 # ============================================================
-# 原始数据解析
+# 物品清单解析 (idAfter = DG 索引)
 # ============================================================
 
-def parse_amazon_reviews(filepath: str, domain_label: str) -> List[Dict]:
+def parse_item_lists(
+    dataset_name: str,
+    domain_x_name: str = "Art",
+    domain_y_name: str = "Office",
+) -> Tuple[Dict[int, Dict], int, int]:
     """
-    解析 Amazon 评论/交互数据文件 (JSON Lines 格式)。
-
-    Args:
-        filepath: 原始数据文件路径
-        domain_label: 域标签 ("Entertainment" 或 "Education")
+    解析源/目标域物品 CSV。
 
     Returns:
-        list of {"user_id": str, "item_id": str, "timestamp": int, "domain": str}
+        (items, num_source, num_target)
+        items: {dg_index: {"title", "domain", "attribute", "id_before"}}
+        num_source / num_target: 源域/目标域物品数量 (决定 DG 索引分界)
     """
-    interactions = []
-    with open(filepath, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-                interactions.append({
-                    "user_id": str(record.get("user_id", record.get("reviewerID", ""))),
-                    "item_id": str(record.get("item_id", record.get("asin", ""))),
-                    "timestamp": int(record.get("timestamp", record.get("unixReviewTime", 0))),
-                    "domain": domain_label,
-                })
-            except (json.JSONDecodeError, ValueError) as e:
-                logger.warning(f"跳过无效记录: {e}")
-                continue
-    logger.info(f"解析 {filepath}: {len(interactions)} 条交互, 域={domain_label}")
-    return interactions
+    if dataset_name == "GM":
+        source_csv = get_dataset_dir() / "item_listM_F.csv"
+        target_csv = get_dataset_dir() / "item_listG_AM_F.csv"
+    else:
+        source_csv = get_dataset_dir() / "item_listA_F.csv"
+        target_csv = get_dataset_dir() / "item_listO_AA_F.csv"
 
+    items: Dict[int, Dict] = {}
+    num_source = 0
 
-def parse_amazon_metadata(filepath: str) -> Dict[str, Dict]:
-    """
-    解析 Amazon 物品元数据文件 (JSON Lines 格式)。
-
-    Returns:
-        dict: {item_id: {"title": str, "description": str, "category": list, "brand": str}}
-    """
-    metadata = {}
-    with open(filepath, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-                item_id = str(record.get("asin", record.get("item_id", "")))
-                desc = record.get("description", "")
-                if isinstance(desc, list):
-                    desc = " ".join(desc)
-                metadata[item_id] = {
-                    "title": record.get("title", ""),
-                    "description": desc,
-                    "category": record.get("categories", record.get("category", [])),
-                    "brand": record.get("brand", ""),
+    for csv_path, domain in [(source_csv, domain_x_name), (target_csv, domain_y_name)]:
+        if not csv_path.exists():
+            raise FileNotFoundError(f"物品清单不存在: {csv_path}")
+        with open(csv_path, "r", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    idx = int(row["idAfter"])
+                except (KeyError, ValueError):
+                    continue
+                items[idx] = {
+                    "title": (row.get("item_title") or "").strip(),
+                    "domain": domain,
+                    "attribute": (row.get("item_attribute") or "").strip(),
+                    "id_before": int(row.get("idBefore", 0) or 0),
                 }
-            except (json.JSONDecodeError, ValueError) as e:
-                logger.warning(f"跳过无效元数据: {e}")
-                continue
-    logger.info(f"解析 {filepath}: {len(metadata)} 个物品元数据")
-    return metadata
+                if domain == domain_x_name:
+                    num_source += 1
+
+    num_target = len(items) - num_source
+    logger.info(
+        f"物品清单解析完成: 源域={num_source}, 目标域={num_target}, "
+        f"总计={len(items)}, 索引范围=[{min(items)}..{max(items)}]"
+    )
+    return items, num_source, num_target
 
 
 # ============================================================
-# 数据清洗与序列构建
+# 交互序列解析 (DG txt)
 # ============================================================
 
-def build_user_sequences(
-    interactions_x: List[Dict],
-    interactions_y: List[Dict],
-    min_interactions: int = 3,
-    max_seq_len: int = 15,
-) -> Dict[str, List[Dict]]:
+def _target_of_a_line(
+    parts: List[str],
+    target_mode: str,
+    n_source: int,
+    domain_x_name: str,
+    domain_y_name: str,
+) -> Tuple[List[int], int, str]:
     """
-    合并双域交互并按时间排序构建用户序列。
+    从一行交互记录中解析历史序列与目标物品。
 
     Args:
-        interactions_x: X 域交互列表
-        interactions_y: Y 域交互列表
-        min_interactions: 最少交互次数 (过滤冷用户)
-        max_seq_len: 最大序列长度
+        parts: 一行按 \\t 切分的字段
+        target_mode: "last" (AO, 目标=最后一个物品) 或 "ts" (GM, 目标=ts==user_ts 的物品)
+        n_source: 源域物品数 (用于索引分界判断目标域)
 
     Returns:
-        dict: {user_id: [{"item_id": str, "domain": str, "timestamp": int}, ...]}
+        (seq_item_ids, target_item_id, target_domain)
     """
-    user_interactions = defaultdict(list)
+    items = [p.split("|")[0].strip() for p in parts[2:]]
+    items = [int(i) for i in items if i]
 
-    for inter in interactions_x + interactions_y:
-        user_interactions[inter["user_id"]].append({
-            "item_id": inter["item_id"],
-            "domain": inter["domain"],
-            "timestamp": inter["timestamp"],
-        })
-
-    # 按时间排序 + 过滤
-    filtered = {}
-    for user_id, seq in user_interactions.items():
-        seq.sort(key=lambda x: x["timestamp"])
-        if len(seq) >= min_interactions:
-            # 截断到最大长度
-            filtered[user_id] = seq[-max_seq_len:]
-
-    logger.info(
-        f"序列构建完成: {len(user_interactions)} 用户 → "
-        f"{len(filtered)} 用户 (过滤<{min_interactions}次交互)"
-    )
-    return filtered
-
-
-def extract_item_set(user_sequences: Dict[str, List[Dict]]) -> Dict[str, List[str]]:
-    """
-    从用户序列中提取物品集合，按域分类。
-
-    Returns:
-        {"all": [...], "X": [...], "Y": [...]}
-    """
-    items = {"all": set(), "X": set(), "Y": set()}
-    for seq in user_sequences.values():
-        for item in seq:
-            items["all"].add(item["item_id"])
-            if item["domain"] in ("Entertainment", "X"):
-                items["X"].add(item["item_id"])
+    if target_mode == "last":
+        if len(items) < 2:
+            return [], 0, domain_y_name
+        target = items[-1]
+        seq = items[:-1]
+    else:  # ts 模式 (GM): 目标 = ts == 字段[1] 的物品
+        user_ts = parts[1]
+        target = None
+        seq = []
+        for p in parts[2:]:
+            f = p.split("|")
+            if len(f) < 2:
+                continue
+            if f[1] == user_ts:
+                target = int(f[0])
             else:
-                items["Y"].add(item["item_id"])
+                seq.append(int(f[0]))
+        if target is None:
+            # 降级: 取最后一个物品
+            target = int(parts[-1].split("|")[0])
+            seq = [int(p.split("|")[0]) for p in parts[2:-1]]
 
-    items = {k: sorted(list(v)) for k, v in items.items()}
-    logger.info(
-        f"物品集合: 全部={len(items['all'])}, "
-        f"X域={len(items['X'])}, Y域={len(items['Y'])}"
-    )
-    return items
+    domain = domain_y_name if target >= n_source else domain_x_name
+    return seq, target, domain
 
 
-# ============================================================
-# 数据划分 (leave-one-out)
-# ============================================================
-
-def split_leave_one_out(
-    user_sequences: Dict[str, List[Dict]],
-    seed: int = 2040,
-) -> Tuple[Dict, Dict, Dict]:
+def parse_split(
+    txt_path: Path,
+    target_mode: str,
+    n_source: int,
+    domain_x_name: str,
+    domain_y_name: str,
+    max_seq_len: int = 15,
+) -> Dict[str, Dict]:
     """
-    Leave-one-out 划分:
-    - 最后一个交互 → test
-    - 倒数第二个 → valid
-    - 其余 → train
+    解析单个划分文件 (train/valid/test)。
+
+    键: sample_id
+      - AO: 同一用户有 X/Y 两个目标行 → "{uid}#X" / "{uid}#Y"
+      - GM: 每用户 1 行 → str(uid)
+    值: {user_id, dg_index, seq, target, domain}
+      dg_index = 行号, 对应 DG 特征文件 (train/test) 的行索引。
 
     Returns:
-        (train_data, valid_data, test_data)
-        每个为 {user_id: {"seq": [...], "target": {...}}}
+        {sample_id: {...}}
     """
-    random.seed(seed)
+    data: Dict[str, Dict] = {}
 
-    train_data = {}
-    valid_data = {}
-    test_data = {}
+    with open(txt_path, "r", encoding="utf-8") as f:
+        for line_idx, line in enumerate(f):
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
 
-    for user_id, seq in user_sequences.items():
-        if len(seq) < 3:
+            uid = str(parts[0])
+            seq, target_id, target_domain = _target_of_a_line(
+                parts, target_mode, n_source, domain_x_name, domain_y_name
+            )
+            if not seq:
+                continue
+
+            # 截断历史 (保留最近 max_seq_len), 物品 id 统一转字符串 (元数据/映射均用 str 键)
+            seq = [str(x) for x in seq[-max_seq_len:]]
+            target_id = str(target_id)
+
+            # 构建 sample_id
+            #   AO: 同一用户有 X/Y 两个目标行 → "{uid}#X" / "{uid}#Y"
+            #   GM: 每用户 1 行 → str(uid)
+            if target_mode == "last":
+                sample_id = f"{uid}#{'Y' if target_domain == domain_y_name else 'X'}"
+            else:
+                sample_id = uid
+
+            # 防止同一用户同行同域导致键冲突 (AO 理论上不会, 防御性处理)
+            if sample_id in data:
+                sample_id = f"{sample_id}-{line_idx}"
+
+            data[sample_id] = {
+                "user_id": uid,
+                "dg_index": line_idx,
+                "seq": seq,
+                "target": {"item_id": target_id, "domain": target_domain},
+                "domain": target_domain,
+            }
+
+    logger.info(
+        f"解析 {txt_path.name}: {len(data)} 条样本, 目标模式={target_mode}, "
+        f"seq长度<= {max_seq_len}"
+    )
+    return data
+
+
+# ============================================================
+# 物品属性 (DG 已产出的 LLM 提取结果)
+# ============================================================
+
+def load_precomputed_attributes() -> Dict[str, Dict]:
+    """
+    从 DG_src/dataset/item_prompt_{AO|GM}/*_exat_*.json 读取物品属性。
+
+    每个 entry: {"qqid": int, "choices": [{"message": {"content": "[...]"}}]}
+    qqid 即 DG 索引。
+
+    Returns:
+        {item_id_str: {"intro": str, "attributes": [str]}}
+    """
+    dir_name = f"item_prompt_{CURRENT_DATASET}"
+    search_dirs = [
+        Path(CURRENT_DG_ROOT) / "DG_src" / "dataset" / dir_name,
+        get_dataset_dir() / dir_name,
+    ]
+
+    files = []
+    for d in search_dirs:
+        files = sorted(glob.glob(str(d / "*_exat_*.json")))
+        if files:
+            break
+
+    attributes: Dict[str, Dict] = {}
+    if not files:
+        logger.warning(f"未找到 DG 预提取属性文件 (搜索 {search_dirs[0]}), item_attributes.json 将为空")
+        return attributes
+
+    for fp in files:
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                entries = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"跳过属性文件 {fp}: {e}")
             continue
 
-        test_target = seq[-1]
-        valid_target = seq[-2]
-        train_seq = seq[:-2]
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            qqid = entry.get("qqid")
+            if qqid is None:
+                continue
+            content = ""
+            choices = entry.get("choices") or []
+            if choices:
+                content = (choices[0].get("message") or {}).get("content") or ""
+            attrs = _parse_attr_list(content)
+            if attrs or content:
+                attributes[str(qqid)] = {
+                    "intro": "",
+                    "attributes": attrs,
+                    "item_id": str(qqid),
+                }
 
-        train_data[user_id] = {
-            "seq": train_seq,
-        }
-        valid_data[user_id] = {
-            "seq": train_seq,  # 验证时使用训练序列
-            "target": valid_target,
-        }
-        test_data[user_id] = {
-            "seq": seq[:-1],  # 测试时使用含验证的序列
-            "target": test_target,
-        }
-
-    logger.info(
-        f"数据划分: train={len(train_data)}, "
-        f"valid={len(valid_data)}, test={len(test_data)}"
-    )
-    return train_data, valid_data, test_data
+    logger.info(f"从 DG 预提取属性加载: {len(attributes)} 个物品 (from {len(files)} 文件)")
+    return attributes
 
 
-# ============================================================
-# ID 映射表构建
-# ============================================================
+def _parse_attr_list(content: str) -> List[str]:
+    """解析 LLM 输出的属性 JSON 列表字符串"""
+    content = content.strip()
+    if not content:
+        return []
+    try:
+        data = json.loads(content)
+        if isinstance(data, list):
+            return [str(a).strip() for a in data if str(a).strip()]
+    except json.JSONDecodeError:
+        pass
+    # 降级: 尝试提取 [...] 子串
+    start, end = content.find("["), content.rfind("]")
+    if 0 <= start < end:
+        try:
+            data = json.loads(content[start:end + 1])
+            if isinstance(data, list):
+                return [str(a).strip() for a in data if str(a).strip()]
+        except json.JSONDecodeError:
+            pass
+    return []
 
-def build_id_mapping(
-    item_set: Dict[str, List[str]],
-) -> Dict[str, Any]:
-    """
-    构建物品 ID 与索引的映射表。
 
-    Returns:
-        {
-            "item_id_to_index": {item_id: int},
-            "index_to_item_id": {int: item_id},
-            "domain_x_items": [item_id, ...],
-            "domain_y_items": [item_id, ...],
-            "num_items": int,
-            "num_x_items": int,
-            "num_y_items": int,
-        }
-    """
-    all_items = item_set["all"]
-    id_to_idx = {item_id: idx for idx, item_id in enumerate(all_items)}
-    idx_to_id = {idx: item_id for item_id, idx in id_to_idx.items()}
-
-    mapping = {
-        "item_id_to_index": id_to_idx,
-        "index_to_item_id": {str(k): v for k, v in idx_to_id.items()},
-        "domain_x_items": item_set["X"],
-        "domain_y_items": item_set["Y"],
-        "num_items": len(all_items),
-        "num_x_items": len(item_set["X"]),
-        "num_y_items": len(item_set["Y"]),
-    }
-    return mapping
+def merge_csv_attributes(
+    item_attributes: Dict[str, Dict],
+    items: Dict[int, Dict],
+):
+    """对缺失属性的物品, 用 CSV 的 item_attribute 列回填 (AO)"""
+    filled = 0
+    for idx, meta in items.items():
+        if str(idx) not in item_attributes:
+            attr_text = meta.get("attribute", "").strip()
+            if attr_text:
+                item_attributes[str(idx)] = {
+                    "intro": "",
+                    "attributes": attr_text.split(),
+                    "item_id": str(idx),
+                }
+                filled += 1
+    if filled:
+        logger.info(f"CSV 属性列回填: {filled} 个物品")
 
 
 # ============================================================
 # 主流程
 # ============================================================
 
-def preprocess(
-    review_x_path: Optional[str] = None,
-    review_y_path: Optional[str] = None,
-    meta_x_path: Optional[str] = None,
-    meta_y_path: Optional[str] = None,
-    config: Optional[Dict] = None,
-):
+def preprocess(config: Optional[Dict] = None):
     """
-    执行完整的预处理流程。
+    执行完整的 DG 数据预处理流程。
 
     Args:
-        review_x_path: X域交互数据路径
-        review_y_path: Y域交互数据路径
-        meta_x_path: X域物品元数据路径
-        meta_y_path: Y域物品元数据路径
-        config: 预处理配置
+        config: 预处理配置 (pipeline 的 preprocess 段),
+                可选包含 dataset.name / dataset.dg_root / domains.x / domains.y
     """
     ensure_dirs()
+
+    # 从配置同步数据集上下文 (standalone 运行时保证一致)
+    ds_cfg = (config or {}).get("dataset", {})
+    ds_name = (ds_cfg.get("name") or CURRENT_DATASET).upper()
+    if ds_name != CURRENT_DATASET or ds_cfg.get("dg_root"):
+        set_dataset(ds_name, ds_cfg.get("dg_root"))
+
     cfg = {**DEFAULT_CONFIG, **(config or {})}
 
-    # 1. 解析原始数据
+    # 域名称
+    domain_x = (config or {}).get("domains", {}).get("x") or DOMAIN_NAMES[CURRENT_DATASET][0]
+    domain_y = (config or {}).get("domains", {}).get("y") or DOMAIN_NAMES[CURRENT_DATASET][1]
+
+    # 目标模式: AO 用 last, GM 用 ts
+    target_mode = "last" if CURRENT_DATASET == "AO" else "ts"
+
     logger.info("=" * 60)
-    logger.info("Step 1: 解析原始交互数据")
+    logger.info(f"Step 1: 解析物品清单 (dataset={CURRENT_DATASET})")
     logger.info("=" * 60)
+    items, n_source, n_target = parse_item_lists(CURRENT_DATASET, domain_x, domain_y)
 
-    if review_x_path and review_y_path:
-        interactions_x = parse_amazon_reviews(review_x_path, cfg["domain_x_name"])
-        interactions_y = parse_amazon_reviews(review_y_path, cfg["domain_y_name"])
-    else:
-        logger.warning("未提供原始交互数据路径，跳过解析。请将数据放入 data/raw/ 目录")
-        return
+    # 物品元数据
+    item_metadata = {}
+    for idx, meta in items.items():
+        item_metadata[str(idx)] = {
+            "title": meta["title"],
+            "domain": meta["domain"],
+            "description": meta.get("attribute", ""),
+        }
+    save_json(item_metadata, get_processed_dir() / "item_metadata.json")
 
-    # 2. 解析元数据
+    # 物品属性
     logger.info("=" * 60)
-    logger.info("Step 2: 解析物品元数据")
+    logger.info("Step 2: 加载 DG 预提取物品属性")
     logger.info("=" * 60)
+    item_attributes = load_precomputed_attributes()
+    merge_csv_attributes(item_attributes, items)
+    save_json(item_attributes, get_processed_dir() / "item_attributes.json")
+    logger.info(f"  共 {len(item_attributes)} 个物品具备属性")
 
-    item_meta = {}
-    if meta_x_path:
-        meta_x = parse_amazon_metadata(meta_x_path)
-        for item_id, meta in meta_x.items():
-            meta["domain"] = cfg["domain_x_name"]
-            item_meta[item_id] = meta
-    if meta_y_path:
-        meta_y = parse_amazon_metadata(meta_y_path)
-        for item_id, meta in meta_y.items():
-            meta["domain"] = cfg["domain_y_name"]
-            item_meta[item_id] = meta
-
-    save_json(item_meta, PROCESSED_DIR / "item_metadata.json")
-
-    # 3. 构建用户序列
+    # ID 映射表 (对齐 DG 索引空间)
     logger.info("=" * 60)
-    logger.info("Step 3: 构建用户交互序列")
+    logger.info("Step 3: 构建 ID 映射表 (DG 索引空间)")
     logger.info("=" * 60)
-
-    user_sequences = build_user_sequences(
-        interactions_x, interactions_y,
-        min_interactions=cfg["min_interactions"],
-        max_seq_len=cfg["max_seq_len"],
-    )
-
-    # 保存交互序列 (简化格式)
-    interactions_simple = {
-        uid: [item["item_id"] for item in seq]
-        for uid, seq in user_sequences.items()
+    domain_x_items = sorted(str(idx) for idx, m in items.items() if m["domain"] == domain_x)
+    domain_y_items = sorted(str(idx) for idx, m in items.items() if m["domain"] == domain_y)
+    id_mapping = {
+        "item_id_to_index": {str(idx): idx for idx in items},
+        "index_to_item_id": {str(idx): idx for idx in items},
+        "domain_x_items": domain_x_items,
+        "domain_y_items": domain_y_items,
+        "num_items": len(items),
+        "num_x_items": len(domain_x_items),
+        "num_y_items": len(domain_y_items),
+        "num_source": n_source,
+        "num_target": n_target,
+        "dataset": CURRENT_DATASET,
     }
-    save_json(interactions_simple, PROCESSED_DIR / "interactions.json")
+    save_json(id_mapping, get_processed_dir() / "id_mapping.json")
 
-    # 4. 提取物品集合 + 构建 ID 映射
+    # 交互序列 (用户级别, 供行为画像/检索文本/UHR 使用)
     logger.info("=" * 60)
-    logger.info("Step 4: 构建 ID 映射表")
-    logger.info("=" * 60)
-
-    item_set = extract_item_set(user_sequences)
-    id_mapping = build_id_mapping(item_set)
-    save_json(id_mapping, PROCESSED_DIR / "id_mapping.json")
-
-    # 5. 数据划分
-    logger.info("=" * 60)
-    logger.info("Step 5: Leave-one-out 数据划分")
+    logger.info("Step 4: 解析交互序列 (train/valid/test)")
     logger.info("=" * 60)
 
-    train_data, valid_data, test_data = split_leave_one_out(
-        user_sequences, seed=cfg["random_seed"]
-    )
-    save_json(train_data, PROCESSED_DIR / "train.json")
-    save_json(valid_data, PROCESSED_DIR / "valid.json")
-    save_json(test_data, PROCESSED_DIR / "test.json")
+    dataset_dir = get_dataset_dir()
+    splits = {}
+    for split_name, file_key in [("train", "train_file"), ("valid", "valid_file"), ("test", "test_file")]:
+        txt_path = dataset_dir / cfg[file_key]
+        if not txt_path.exists():
+            logger.warning(f"{split_name} 文件不存在: {txt_path}, 跳过")
+            splits[split_name] = {}
+            continue
+        splits[split_name] = parse_split(
+            txt_path, target_mode, n_source, domain_x, domain_y,
+            max_seq_len=cfg["max_seq_len"],
+        )
 
-    # 6. 输出统计
+    # interactions.json: {user_id: [item_id, ...]} (历史序列, 不含目标)
+    interactions: Dict[str, List[str]] = defaultdict(list)
+    for split_name, split_data in splits.items():
+        for sample in split_data.values():
+            uid = sample["user_id"]
+            seq = sample["seq"]
+            if len(interactions[uid]) < len(seq):
+                interactions[uid] = list(seq)
+    # 过滤冷用户 (少于 min_interactions)
+    filtered = {
+        uid: seq for uid, seq in interactions.items()
+        if len(seq) >= cfg["min_interactions"]
+    }
+    logger.info(f"用户交互序列: {len(interactions)} → {len(filtered)} (过滤 <{cfg['min_interactions']} 次)")
+    save_json(filtered, get_processed_dir() / "interactions.json")
+
+    # 保存各 split
+    for split_name in ("train", "valid", "test"):
+        split_data = splits[split_name]
+        # 过滤历史过短 (无法构成目标) 的样本
+        keep = {
+            sid: s for sid, s in split_data.items()
+            if len(s["seq"]) >= 1 and s["target"]["item_id"] is not None
+        }
+        save_json(keep, get_processed_dir() / f"{split_name}.json")
+        logger.info(f"  {split_name}: {len(keep)} 条样本")
+
+    # 统计
     logger.info("=" * 60)
     logger.info("预处理完成！统计信息:")
-    logger.info(f"  用户数: {len(user_sequences)}")
-    logger.info(f"  物品总数: {id_mapping['num_items']}")
-    logger.info(f"  X域物品: {id_mapping['num_x_items']}")
-    logger.info(f"  Y域物品: {id_mapping['num_y_items']}")
-    logger.info(f"  训练集: {len(train_data)} 用户")
-    logger.info(f"  验证集: {len(valid_data)} 用户")
-    logger.info(f"  测试集: {len(test_data)} 用户")
-    logger.info(f"  产出目录: {PROCESSED_DIR}")
+    logger.info(f"  数据集: {CURRENT_DATASET} ({domain_x} → {domain_y})")
+    logger.info(f"  物品总数: {id_mapping['num_items']} (源 {n_source}, 目标 {n_target})")
+    logger.info(f"  用户数: {len(filtered)}")
+    logger.info(f"  训练集: {len(splits['train'])} 条, 验证集: {len(splits['valid'])} 条, "
+                f"测试集: {len(splits['test'])} 条")
+    logger.info(f"  产出目录: {get_processed_dir()}")
     logger.info("=" * 60)
 
 

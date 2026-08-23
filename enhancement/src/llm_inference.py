@@ -13,11 +13,9 @@ import logging
 import re
 import time
 from pathlib import Path
-
-import torch
 from typing import Any, Dict, List, Optional, Tuple
 
-from data_utils import OUTPUT_DIR, PROCESSED_DIR, DATASET_SUFFIX, load_json, save_json, ensure_dirs
+from data_utils import get_output_dir, get_processed_dir, load_json, save_json, ensure_dirs
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +29,7 @@ class LLMRecommender:
 
     def __init__(
         self,
-        base_model: str = "meta-llama/Llama-2-7b-chat-hf",
+        base_model: str = "meta-llama/Llama-2-7b-hf",
         lora_path: Optional[str] = None,
         device: str = "cuda",
         max_new_tokens: int = 128,
@@ -66,7 +64,7 @@ class LLMRecommender:
 
         self._model = AutoModelForCausalLM.from_pretrained(
             self.base_model,
-            torch_dtype=torch.float16,
+            torch_dtype="auto",
             device_map="auto",
             trust_remote_code=True,
         )
@@ -181,8 +179,8 @@ class LLMRecommender:
                 )
 
             for j, output in enumerate(outputs):
-                input_len = inputs["input_ids"].shape[1]  # left padding 下用 shape[1]
-                new_tokens = output[input_len:]
+                # left/right padding 都适用: 用输入总长度 (含 pad) 切片, 跳过整个输入前缀
+                new_tokens = output[inputs["input_ids"].shape[1]:]
                 generated = self._tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
                 result = generated.split("\n")[0].strip()
                 result = re.sub(r'^Output:\s*', '', result, flags=re.IGNORECASE)
@@ -243,12 +241,12 @@ def run_inference(
     ensure_dirs()
 
     if test_file is None:
-        test_file = str(PROCESSED_DIR / f"test_instructions{DATASET_SUFFIX}.json")
+        test_file = str(get_processed_dir() / "test_instructions.json")
     if lora_path is None:
-        lora_path = str(OUTPUT_DIR / f"lora_weights{DATASET_SUFFIX}" / "final")
+        lora_path = str(get_output_dir() / "lora_weights" / "final")
 
     cfg = config or {}
-    base_model = cfg.get("model", {}).get("base_model", "meta-llama/Llama-2-7b-chat-hf")
+    base_model = cfg.get("model", {}).get("base_model", "meta-llama/Llama-2-7b-hf")
     batch_size = cfg.get("inference", {}).get("batch_size", 8)
     temperature = cfg.get("inference", {}).get("temperature", 0.1)
 
@@ -285,6 +283,9 @@ def run_inference(
     for i, (inst, pred) in enumerate(zip(test_data, predictions)):
         results.append({
             "user_id": inst.get("user_id"),
+            "sample_id": inst.get("sample_id"),
+            "dg_index": inst.get("dg_index"),
+            "actual_user_id": inst.get("actual_user_id"),
             "target_item_id": inst.get("target_item_id"),
             "target_domain": inst.get("target_domain"),
             "ground_truth": inst.get("output", ""),
@@ -292,7 +293,7 @@ def run_inference(
         })
 
     # 保存
-    output_file = str(OUTPUT_DIR / "predictions" / f"test_predictions{DATASET_SUFFIX}.json")
+    output_file = str(get_output_dir() / "predictions" / "test_predictions.json")
     save_json(results, output_file)
 
     # 统计
@@ -318,17 +319,10 @@ def run_inference(
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     import yaml
-    import os
 
-    # 根据 DATASET_SUFFIX 加载对应配置文件
-    suffix = os.environ.get("DATASET_SUFFIX", "")
-    config_name = f"lora_config{suffix}.yaml"
-    config_path = Path(__file__).parent.parent / "config" / config_name
+    config_path = Path(__file__).parent.parent / "config" / "lora_config.yaml"
     cfg = {}
     if config_path.exists():
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
-        logger.info(f"已加载配置: {config_path}")
-    else:
-        logger.warning(f"配置文件不存在: {config_path}, 使用默认配置")
     run_inference(config=cfg)

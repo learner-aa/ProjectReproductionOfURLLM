@@ -10,7 +10,7 @@ import random
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from data_utils import PROCESSED_DIR, DATASET_SUFFIX, load_json, save_json
+from data_utils import get_processed_dir, load_json, save_json
 from prompt_templates import (
     PROMPT_II_RECOMMEND_BASE,
     PROMPT_II_RECOMMEND_WITH_PROFILE,
@@ -35,8 +35,8 @@ def build_single_instruction(
     item_metadata: Dict[str, Dict],
     item_attributes: Dict[str, Dict],
     template_type: str = "profile",
-    domain_x_name: str = "Entertainment",
-    domain_y_name: str = "Education",
+    domain_x_name: str = "Art",
+    domain_y_name: str = "Office",
     retrieved_users_text: Optional[str] = None,
 ) -> Dict[str, str]:
     """
@@ -58,12 +58,6 @@ def build_single_instruction(
         {"instruction": str, "input": str, "output": str}
     """
     target_domain = target_item.get("domain", domain_x_name)
-    # 域标签映射: AO 数据集中 GM 标签混用 (Entertainment=Art, Education=Office)
-    domain_label_map = {
-        "Entertainment": "Art",
-        "Education": "Office",
-    }
-    target_domain = domain_label_map.get(target_domain, target_domain)
     target_title = item_metadata.get(
         target_item["item_id"], {}
     ).get("title", target_item["item_id"])
@@ -87,13 +81,10 @@ def build_single_instruction(
             [i["title"] for i in similar_y[:3]]
         ) or "N/A"
 
-        # 修正 profile_text 中的域标签
-        dx_label = domain_label_map.get(domain_x_name, domain_x_name)
-        dy_label = domain_label_map.get(domain_y_name, domain_y_name)
         profile_text = (
             f"Total interactions: {behavior.get('total_interactions', 0)}\n"
-            f"Domain distribution: {dx_label}({behavior.get('domain_x_count', 0)}), "
-            f"{dy_label}({behavior.get('domain_y_count', 0)})\n"
+            f"Domain distribution: {domain_x_name}({behavior.get('domain_x_count', 0)}), "
+            f"{domain_y_name}({behavior.get('domain_y_count', 0)})\n"
             f"Top attributes: {format_attributes(semantic.get('preferred_attributes', []))}\n"
             f"Top categories: {format_attributes(semantic.get('preferred_categories', []))}"
         )
@@ -154,8 +145,8 @@ def build_instruction_dataset(
     item_metadata: Dict[str, Dict],
     item_attributes: Dict[str, Dict],
     template_type: str = "profile",
-    domain_x_name: str = "Entertainment",
-    domain_y_name: str = "Education",
+    domain_x_name: str = "Art",
+    domain_y_name: str = "Office",
     retrieval_map: Optional[Dict[str, List[str]]] = None,
     retriever: Optional[Any] = None,
 ) -> List[Dict[str, str]]:
@@ -193,9 +184,10 @@ def build_instruction_dataset(
             skipped += 1
             continue
 
-        profile = user_profiles.get(user_id, {})
+        # 用户画像按 user_id 建索引 (AO 同一用户 X/Y 两行共用)
+        profile = user_profiles.get(data.get("user_id"), {})
 
-        # 获取检索用户文本
+        # 获取检索用户文本 (retrieval_map 以 sample_id 为键)
         retrieved_text = None
         if retrieval_map and retriever:
             retrieved_ids = retrieval_map.get(user_id, [])
@@ -218,6 +210,10 @@ def build_instruction_dataset(
                 domain_y_name=domain_y_name,
                 retrieved_users_text=retrieved_text,
             )
+            # 透传 sample_id / dg_index (用于 DG 回退与评估按行定位)
+            inst["sample_id"] = user_id
+            inst["dg_index"] = data.get("dg_index")
+            inst["actual_user_id"] = data.get("user_id")
             instructions.append(inst)
         except Exception as e:
             logger.warning(f"构建 {user_id} 的 instruction 失败: {e}")
@@ -284,18 +280,18 @@ def build_all_instruction_data(config: Dict):
     logger.info("=" * 60)
 
     # 加载数据
-    train_data = load_json(PROCESSED_DIR / f"train{DATASET_SUFFIX}.json")
-    valid_data = load_json(PROCESSED_DIR / f"valid{DATASET_SUFFIX}.json")
-    test_data = load_json(PROCESSED_DIR / f"test{DATASET_SUFFIX}.json")
-    item_metadata = load_json(PROCESSED_DIR / f"item_metadata{DATASET_SUFFIX}.json")
-    id_mapping = load_json(PROCESSED_DIR / f"id_mapping{DATASET_SUFFIX}.json")
+    train_data = load_json(get_processed_dir() / "train.json")
+    valid_data = load_json(get_processed_dir() / "valid.json")
+    test_data = load_json(get_processed_dir() / "test.json")
+    item_metadata = load_json(get_processed_dir() / "item_metadata.json")
+    id_mapping = load_json(get_processed_dir() / "id_mapping.json")
 
     # 用户画像 (可选)
-    profile_path = PROCESSED_DIR / f"user_profiles{DATASET_SUFFIX}.json"
+    profile_path = get_processed_dir() / "user_profiles.json"
     user_profiles = load_json(profile_path) if profile_path.exists() else {}
 
     # 物品属性 (可选)
-    attr_path = PROCESSED_DIR / f"item_attributes{DATASET_SUFFIX}.json"
+    attr_path = get_processed_dir() / "item_attributes.json"
     item_attributes = load_json(attr_path) if attr_path.exists() else {}
 
     # 配置
@@ -303,13 +299,13 @@ def build_all_instruction_data(config: Dict):
     template_type = inst_cfg.get("template_type", "profile")
     output_format = inst_cfg.get("output_format", "alpaca")
     domain_cfg = config.get("domains", {})
-    domain_x = domain_cfg.get("x", "Entertainment")
-    domain_y = domain_cfg.get("y", "Education")
+    domain_x = domain_cfg.get("x", "Art")
+    domain_y = domain_cfg.get("y", "Office")
 
     # 检索结果 (可选，来自 knn_retriever 阶段)
     retrieval_results = {}
     retriever = None
-    retrieval_path = PROCESSED_DIR / f"retrieval_results{DATASET_SUFFIX}.json"
+    retrieval_path = get_processed_dir() / "retrieval_results.json"
     if retrieval_path.exists():
         retrieval_results = load_json(retrieval_path)
         logger.info(f"已加载检索结果: train={len(retrieval_results.get('train', {}))}, "
@@ -359,9 +355,9 @@ def build_all_instruction_data(config: Dict):
         test_inst = convert_to_chatml(test_inst)
 
     # 保存
-    save_json(train_inst, PROCESSED_DIR / f"train_instructions{DATASET_SUFFIX}.json")
-    save_json(valid_inst, PROCESSED_DIR / f"valid_instructions{DATASET_SUFFIX}.json")
-    save_json(test_inst, PROCESSED_DIR / f"test_instructions{DATASET_SUFFIX}.json")
+    save_json(train_inst, get_processed_dir() / "train_instructions.json")
+    save_json(valid_inst, get_processed_dir() / "valid_instructions.json")
+    save_json(test_inst, get_processed_dir() / "test_instructions.json")
 
     # 统计
     logger.info("=" * 60)
@@ -377,16 +373,10 @@ def build_all_instruction_data(config: Dict):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     import yaml
-    import os
-    # 根据 DATASET_SUFFIX 加载对应配置文件
-    suffix = os.environ.get("DATASET_SUFFIX", "")
-    config_name = f"pipeline_config{suffix}.yaml"
-    config_path = Path(__file__).parent.parent / "config" / config_name
+    config_path = Path(__file__).parent.parent / "config" / "pipeline_config.yaml"
     if config_path.exists():
         with open(config_path) as f:
             cfg = yaml.safe_load(f)
-        logger.info(f"已加载配置: {config_path}")
         build_all_instruction_data(cfg)
     else:
-        logger.warning(f"配置文件不存在: {config_path}, 使用空配置")
         build_all_instruction_data({})
