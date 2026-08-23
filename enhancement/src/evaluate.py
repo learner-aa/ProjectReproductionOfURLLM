@@ -21,60 +21,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from data_utils import (
-    OUTPUT_DIR, PROCESSED_DIR, DATASET_SUFFIX,
+    get_output_dir, get_processed_dir,
     load_json, save_json,
     load_dg_scores, load_dg_candidates, load_dg_config,
 )
-
-# AO 数据集: 复用 answer_refinement 的 CSV 映射与 uid→行映射
-_AO_HELPERS = None
-def _get_ao_helpers():
-    global _AO_HELPERS
-    if _AO_HELPERS is not None:
-        return _AO_HELPERS
-    import csv as _csv
-    from pathlib import Path as _Path
-    proj_root = _Path(__file__).resolve().parent.parent
-    dg_root = proj_root.parent / "DG_Final" / "AO"
-
-    # CSV: asin → (title, dg_index)
-    asin_to_dg = {}
-    for p in [dg_root / "item_listA_F.csv", dg_root / "item_listO_AA_F.csv"]:
-        if not p.exists():
-            continue
-        with open(p, encoding="utf-8") as f:
-            next(f, None)
-            for row in _csv.reader(f):
-                if len(row) < 3:
-                    continue
-                try:
-                    asin_to_dg[row[0].strip()] = int(row[2].strip())
-                except (ValueError, IndexError):
-                    continue
-
-    # uid → candidate Art 行 (gt_dg_idx < M_LENGTH=18639 的行)
-    uid_to_art_row = {}
-    M_LENGTH = 18639
-    test_f2 = dg_root / "test_F2.txt"
-    if test_f2.exists():
-        with open(test_f2, encoding="utf-8") as f:
-            for i, line in enumerate(f):
-                parts = line.strip().split("\t")
-                if len(parts) < 3:
-                    continue
-                uid = parts[0]
-                last = parts[-1].split("|")
-                if not last:
-                    continue
-                try:
-                    gt_dg_idx = int(last[0])
-                except ValueError:
-                    continue
-                if gt_dg_idx < M_LENGTH:
-                    uid_to_art_row[uid] = i
-
-    _AO_HELPERS = (asin_to_dg, uid_to_art_row)
-    return _AO_HELPERS
 
 logger = logging.getLogger(__name__)
 
@@ -249,7 +199,8 @@ def analyze_cold_warm_start(
     warm_preds, warm_targets = [], []
 
     for r in results:
-        user_id = r.get("user_id")
+        # 优先用真实 user_id (AO 同一用户 X/Y 两行), 避免 sample_id 含后缀
+        user_id = r.get("actual_user_id") or r.get("user_id")
         pred = r.get("prediction", "")
         target = r.get("ground_truth", "")
 
@@ -288,9 +239,6 @@ def evaluate_dg_baseline(
     """
     从 DG 模型的评分矩阵计算基线指标。
 
-    GM 数据集: 用 best_trte 评分矩阵 argsort + id_mapping (原逻辑)
-    AO 数据集: 用 candidate 矩阵 (值=CSV dg_index) + CSV asin→dg_index 映射
-
     Args:
         test_data: 测试集数据
         id_mapping: ID 映射表
@@ -299,6 +247,15 @@ def evaluate_dg_baseline(
     Returns:
         指标字典
     """
+    try:
+        scores = load_dg_scores()
+    except FileNotFoundError:
+        logger.warning("DG 评分矩阵不存在，跳过基线评估")
+        return {}
+
+    item_to_idx = id_mapping.get("item_id_to_index", {})
+    user_ids = list(test_data.keys())
+
     metrics = {}
     for k in k_values:
         metrics[f"HR@{k}"] = 0.0
@@ -306,80 +263,34 @@ def evaluate_dg_baseline(
     metrics["MRR"] = 0.0
     valid_count = 0
 
-    # AO 数据集: 用 candidate 矩阵
-    if DATASET_SUFFIX == "_AO":
-        try:
-            candidates = load_dg_candidates()  # (2000, 10000), 值=CSV dg_index
-        except FileNotFoundError:
-            logger.warning("AO DG candidate 矩阵不存在，跳过基线评估")
-            return {}
+    for ui, user_id in enumerate(user_ids):
+        # 评分矩阵行号 = DG 特征行号 (dg_index); 缺省用列表下标
+        score_idx = test_data[user_id].get("dg_index", ui)
+        if score_idx >= scores.shape[0]:
+            continue
+        target = test_data[user_id].get("target", {})
+        target_id = str(target.get("item_id", ""))
+        target_idx = item_to_idx.get(target_id)
 
-        asin_to_dg, uid_to_art_row = _get_ao_helpers()
-        logger.info(f"AO DG 基线评估: candidate shape={candidates.shape}, "
-                    f"CSV映射={len(asin_to_dg)}, uid映射={len(uid_to_art_row)}")
+        if target_idx is None:
+            continue
 
-        user_ids = list(test_data.keys())
-        for user_id in user_ids:
-            target = test_data[user_id].get("target", {})
-            target_asin = target.get("item_id", "")
-            gt_dg_idx = asin_to_dg.get(target_asin)
-            if gt_dg_idx is None:
-                continue
+        user_scores = scores[score_idx]
+        sorted_items = np.argsort(user_scores)[::-1]
 
-            art_row = uid_to_art_row.get(str(user_id))
-            if art_row is None or art_row >= candidates.shape[0]:
-                continue
-
-            valid_count += 1
-            cand_row = candidates[art_row]
-            # 找 ground truth 在 candidate 中的排名
-            match_pos = np.where(cand_row == gt_dg_idx)[0]
-            if len(match_pos) > 0:
-                rank = int(match_pos[0]) + 1
-                metrics["MRR"] += 1.0 / rank
-                for k in k_values:
-                    if rank <= k:
-                        metrics[f"HR@{k}"] += 1.0
-                        metrics[f"NDCG@{k}"] += 1.0 / np.log2(rank + 1)
-
-    else:
-        # GM 数据集: 原逻辑 (best_trte 矩阵 argsort + id_mapping)
-        try:
-            scores = load_dg_scores()
-        except FileNotFoundError:
-            logger.warning("DG 评分矩阵不存在，跳过基线评估")
-            return {}
-
-        item_to_idx = id_mapping.get("item_id_to_index", {})
-        user_ids = list(test_data.keys())
-
-        for ui, user_id in enumerate(user_ids):
-            if ui >= scores.shape[0]:
-                break
-            target = test_data[user_id].get("target", {})
-            target_id = target.get("item_id", "")
-            target_idx = item_to_idx.get(target_id)
-
-            if target_idx is None:
-                continue
-
-            user_scores = scores[ui]
-            sorted_items = np.argsort(user_scores)[::-1]
-
-            valid_count += 1
-            target_rank = np.where(sorted_items == target_idx)[0]
-            if len(target_rank) > 0:
-                rank = target_rank[0] + 1
-                metrics["MRR"] += 1.0 / rank
-                for k in k_values:
-                    if rank <= k:
-                        metrics[f"HR@{k}"] += 1.0
-                        metrics[f"NDCG@{k}"] += 1.0 / np.log2(rank + 1)
+        valid_count += 1
+        target_rank = np.where(sorted_items == target_idx)[0]
+        if len(target_rank) > 0:
+            rank = target_rank[0] + 1
+            metrics["MRR"] += 1.0 / rank
+            for k in k_values:
+                if rank <= k:
+                    metrics[f"HR@{k}"] += 1.0
+                    metrics[f"NDCG@{k}"] += 1.0 / np.log2(rank + 1)
 
     if valid_count > 0:
         for key in metrics:
-            if isinstance(metrics[key], float):
-                metrics[key] /= valid_count
+            metrics[key] /= valid_count
 
     metrics["evaluated_users"] = valid_count
     return metrics
@@ -405,22 +316,12 @@ def compute_out_of_domain_rate(
     Returns:
         {"ood_rate": float, "ood_count": int, "total": int}
     """
-    # 域标签归一化: AO 数据集里 Entertainment=Art, Education=Office
-    # (convert_dg_data.py 用 Entertainment/Education, build_instruction_data.py 映射为 Art/Office)
-    def normalize_domain(d: str) -> str:
-        d = d.lower().strip()
-        if d in ("art", "entertainment"):
-            return "Art"
-        if d in ("office", "education"):
-            return "Office"
-        return d.capitalize() if d else d
-
-    # 构建标题 → 归一化域的映射
+    # 构建标题 → 域的映射
     title_to_domain = {}
     for item_id, meta in item_metadata.items():
         title = meta.get("title", "").lower().strip()
         if title:
-            title_to_domain[title] = normalize_domain(meta.get("domain", "Unknown"))
+            title_to_domain[title] = meta.get("domain", "Unknown")
 
     ood_count = 0
     total = len(predictions)
@@ -428,9 +329,8 @@ def compute_out_of_domain_rate(
     for pred, target_domain in zip(predictions, target_domains):
         pred_lower = pred.lower().strip()
         matched_domain = title_to_domain.get(pred_lower)
-        target_norm = normalize_domain(target_domain)
 
-        if matched_domain and matched_domain != target_norm:
+        if matched_domain and matched_domain != target_domain:
             ood_count += 1
         elif matched_domain is None:
             # 无法匹配到真实物品，视为潜在域外
@@ -516,7 +416,7 @@ def run_evaluation(config: Optional[Dict] = None):
     logger.info("=" * 60)
 
     # 加载推理结果
-    pred_file = OUTPUT_DIR / "predictions" / f"test_predictions{DATASET_SUFFIX}.json"
+    pred_file = get_output_dir() / "predictions" / "test_predictions.json"
     if not pred_file.exists():
         logger.error(f"推理结果不存在: {pred_file}")
         return
@@ -525,22 +425,22 @@ def run_evaluation(config: Optional[Dict] = None):
 
     # 加载辅助数据
     interactions = {}
-    inter_path = PROCESSED_DIR / "interactions.json"
+    inter_path = get_processed_dir() / "interactions.json"
     if inter_path.exists():
         interactions = load_json(inter_path)
 
     item_metadata = {}
-    meta_path = PROCESSED_DIR / f"item_metadata{DATASET_SUFFIX}.json"
+    meta_path = get_processed_dir() / "item_metadata.json"
     if meta_path.exists():
         item_metadata = load_json(meta_path)
 
     id_mapping = {}
-    map_path = PROCESSED_DIR / f"id_mapping{DATASET_SUFFIX}.json"
+    map_path = get_processed_dir() / "id_mapping.json"
     if map_path.exists():
         id_mapping = load_json(map_path)
 
     test_data = {}
-    test_path = PROCESSED_DIR / f"test{DATASET_SUFFIX}.json"
+    test_path = get_processed_dir() / "test.json"
     if test_path.exists():
         test_data = load_json(test_path)
 
@@ -589,8 +489,7 @@ def run_evaluation(config: Optional[Dict] = None):
     # 6. Refined predictions 评估 (Answer Refinement 后)
     refined_metrics = {}
     refined_fuzzy = {}
-    expanded_metrics = {}
-    refined_file = OUTPUT_DIR / "refined_predictions" / f"refined_predictions{DATASET_SUFFIX}.json"
+    refined_file = get_output_dir() / "refined_predictions" / "refined_predictions.json"
     if refined_file.exists():
         refined_results = load_json(refined_file)
         refined_preds = [r["prediction"] for r in refined_results]
@@ -603,22 +502,6 @@ def run_evaluation(config: Optional[Dict] = None):
         logger.info("精炼后 (Refined) 模糊匹配指标:")
         for k, v in refined_fuzzy.items():
             logger.info(f"  Refined_{k}: {v:.4f}")
-
-        # 6.5 Top-K 候选评估 (使用 refine_answers 的 BM25 top-20 候选)
-        if any("top_k_candidates" in r for r in refined_results):
-            topk_preds = []
-            for r in refined_results:
-                candidates = r.get("top_k_candidates", [])
-                if candidates:
-                    topk_preds.append(candidates)
-                else:
-                    topk_preds.append([r["prediction"]])
-            expanded_metrics = compute_all_metrics(topk_preds, refined_targets)
-            logger.info("Top-K 候选评估指标 (BM25 top-20):")
-            for k, v in expanded_metrics.items():
-                logger.info(f"  TopK_{k}: {v:.4f}")
-        else:
-            logger.warning("refined_predictions 中无 top_k_candidates, 跳过 top-K 评估")
 
         # 精炼后域外率
         if item_metadata:
@@ -637,7 +520,7 @@ def run_evaluation(config: Optional[Dict] = None):
 
     # 7. UHR (User Hit Rate)
     uhr_metrics = {}
-    retrieval_path = PROCESSED_DIR / f"retrieval_results{DATASET_SUFFIX}.json"
+    retrieval_path = get_processed_dir() / "retrieval_results.json"
     if retrieval_path.exists() and test_data and interactions:
         retrieval_results = load_json(retrieval_path)
         uhr_metrics = compute_uhr(retrieval_results, test_data, interactions)
@@ -662,12 +545,10 @@ def run_evaluation(config: Optional[Dict] = None):
         eval_result["refined_fuzzy"] = refined_fuzzy
         if refined_ood:
             eval_result["refined_ood"] = refined_ood
-    if expanded_metrics:
-        eval_result["expanded_metrics"] = expanded_metrics
     if uhr_metrics:
         eval_result["uhr"] = uhr_metrics
 
-    eval_file = str(OUTPUT_DIR / "eval_results" / f"evaluation{DATASET_SUFFIX}.json")
+    eval_file = str(get_output_dir() / "eval_results" / "evaluation.json")
     save_json(eval_result, eval_file)
     logger.info(f"评估结果已保存: {eval_file}")
 
@@ -707,18 +588,4 @@ def run_evaluation(config: Optional[Dict] = None):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    import yaml
-    import os
-
-    # 根据 DATASET_SUFFIX 加载对应配置文件
-    suffix = os.environ.get("DATASET_SUFFIX", "")
-    config_name = f"pipeline_config{suffix}.yaml"
-    config_path = Path(__file__).parent.parent / "config" / config_name
-    cfg = {}
-    if config_path.exists():
-        with open(config_path) as f:
-            cfg = yaml.safe_load(f)
-        logger.info(f"已加载配置: {config_path}")
-    else:
-        logger.warning(f"配置文件不存在: {config_path}, 使用默认配置")
-    run_evaluation(cfg)
+    run_evaluation()

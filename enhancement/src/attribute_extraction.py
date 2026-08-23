@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from data_utils import PROCESSED_DIR, load_json, save_json
+from data_utils import get_processed_dir, load_json, save_json
 from prompt_templates import (
     PROMPT_I_ATTRIBUTE_EXTRACTION_EN,
     PROMPT_I_ATTRIBUTE_EXTRACTION_ZH,
@@ -233,7 +233,7 @@ def extract_all_attributes(
         {item_id: {"intro": str, "attributes": [str], "item_id": str}}
     """
     if output_path is None:
-        output_path = str(PROCESSED_DIR / "item_attributes.json")
+        output_path = str(get_processed_dir() / "item_attributes.json")
 
     # 断点续传: 加载已处理结果
     results = {}
@@ -302,8 +302,18 @@ def run_attribute_extraction(config: Dict):
             - api_key, base_url, model (API模式)
             - model_name, device (本地模式)
             - language: "en" 或 "zh"
+            - use_precomputed: True 时直接从 DG 已产出的属性文件重建, 跳过 LLM 调用
     """
-    item_metadata = load_json(PROCESSED_DIR / "item_metadata.json")
+    if config.get("use_precomputed"):
+        logger.info("use_precomputed=True: 从 DG 预提取属性文件重建 item_attributes.json")
+        from preprocess import load_precomputed_attributes
+        from data_utils import save_json
+        item_attributes = load_precomputed_attributes()
+        save_json(item_attributes, get_processed_dir() / "item_attributes.json")
+        logger.info(f"属性提取(预计算)完成: {len(item_attributes)} 个物品")
+        return
+
+    item_metadata = load_json(get_processed_dir() / "item_metadata.json")
 
     if config.get("backend", "api") == "api":
         client = APIClient(

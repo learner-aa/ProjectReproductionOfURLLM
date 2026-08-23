@@ -54,7 +54,7 @@ class RecommendRequest(BaseModel):
 
 @app.post("/api/recommend")
 async def recommend(req: RecommendRequest):
-    # 调用 llama2-SFT/generate.sh
+    # 调用 enhancement/src/llm_inference.py (LLMRecommender) 生成推荐
     # 返回推荐结果
     pass
 

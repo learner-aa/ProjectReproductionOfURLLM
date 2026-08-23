@@ -4,25 +4,19 @@
 
 # 基座模型
 model:
-  base_model: "/root/autodl-tmp/URLLM-project/models/Llama-2-7b-hf/models/shakechen--Llama-2-7b-hf/snapshots/master"
+  base_model: "/root/autodl-tmp/URLLM-project/models/Llama-2-7b-hf/models/shakechen--Llama-2-7b-hf/snapshots/master"   # 必须与训练时基座一致 (base 版, 非 chat); 见 adapter_config.json 的 base_model_name_or_path
   lora_r: 8                                      # LoRA rank
   lora_alpha: 16                                 # LoRA alpha (通常 2x rank)
   lora_dropout: 0.05
-  lora_target_modules:                           # 应用 LoRA 的模块 (原始论文7个)
+  lora_target_modules:                           # 应用 LoRA 的模块
     - "q_proj"
-    - "k_proj"
     - "v_proj"
-    - "o_proj"
-    - "gate_proj"
-    - "up_proj"
-    - "down_proj"
 
 # 训练参数
 training:
-  num_epochs: 5                                  # 扩 modules+epochs: 5 epochs (~19735步)
-  max_steps: -1                                  # -1 = 取消步数限制,按 num_epochs 完整训练
-  batch_size: 1                                  # per-device batch size (OOM 降至1, vocab大)
-  gradient_accumulation_steps: 8                 # effective batch = 1*8 = 8
+  num_epochs: 3
+  batch_size: 4                                  # per-device batch size
+  gradient_accumulation_steps: 8                 # effective batch = 4*8 = 32
   learning_rate: 1.0e-4
   warmup_ratio: 0.03
   max_seq_length: 1024                           # 最大序列长度
@@ -43,7 +37,7 @@ data:
 inference:
   batch_size: 8                                  # 推理 batch size
   temperature: 0.1                               # 低温度 → 更确定的生成
-  max_new_tokens: 128                            # 完整生成 (原64加速跑通,现恢复128)
+  max_new_tokens: 128                            # 最大生成 token
 
 # 输出
 output:
