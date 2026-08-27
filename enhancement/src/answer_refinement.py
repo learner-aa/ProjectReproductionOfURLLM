@@ -60,7 +60,6 @@ class BM25Grounding:
         self.item_ids = []
         self.titles = []
         self.title_lower = []
-        self._title_to_item_id = {}
 
         for item_id, meta in item_metadata.items():
             title = meta.get("title", "").strip()
@@ -68,7 +67,6 @@ class BM25Grounding:
                 self.item_ids.append(item_id)
                 self.titles.append(title)
                 self.title_lower.append(title.lower())
-                self._title_to_item_id[title.lower()] = item_id
 
         # 尝试构建 BM25 索引
         self._bm25 = None
@@ -111,17 +109,9 @@ class BM25Grounding:
         if not llm_output.strip():
             return []
 
-        # 先尝试精确匹配
-        output_lower = llm_output.strip().lower()
-        if output_lower in self._title_to_item_id:
-            item_id = self._title_to_item_id[output_lower]
-            return [{
-                "item_id": item_id,
-                "title": self.item_metadata[item_id].get("title", ""),
-                "score": 1.0,
-            }]
-
-        # BM25 或 token overlap
+        # 不做精确匹配短路: LLM 输出即使恰好等于某标题, 仍走 BM25 排 top-m 列表。
+        # 精确匹配项因命中全部查询 token 得分最高自然排第 1, 其余补满, 保证输出列表
+        # 长度 >= top_m (否则列表长度=1 会让 HR@K 退化成 HR@1, 白白丢召回)。
         query_tokens = self._tokenize(llm_output)
         if not query_tokens:
             return []
@@ -259,6 +249,40 @@ def dg_fallback(
     }
 
 
+def dg_candidate_fallback_list(
+    test_user_index: int,
+    dg_candidates: Optional[np.ndarray] = None,
+    item_metadata: Optional[Dict[str, Dict]] = None,
+    top_k: int = 20,
+) -> List[Dict[str, Any]]:
+    """
+    从 DG 候选矩阵 (真 I₁) 取 top-K 物品列表作为回退。
+
+    候选矩阵行 = dg_index, 列按 DG 评分降序排列 (top-1 在前)。
+    """
+    if dg_candidates is None:
+        dg_candidates = load_dg_candidates()
+    if item_metadata is None:
+        item_metadata = load_item_metadata()
+
+    if test_user_index >= dg_candidates.shape[0]:
+        logger.warning(
+            f"test_user_index {test_user_index} 超出候选矩阵范围 "
+            f"({dg_candidates.shape[0]})"
+        )
+        return []
+
+    result = []
+    for idx in dg_candidates[test_user_index][:top_k]:
+        iid = str(idx)
+        result.append({
+            "item_id": iid,
+            "title": item_metadata.get(iid, {}).get("title", iid),
+            "score": 0.0,
+        })
+    return result
+
+
 # ============================================================
 # 主编排函数
 # ============================================================
@@ -290,7 +314,8 @@ def refine_predictions(
     domain_cfg = cfg.get("domains", {})
     domain_x = domain_cfg.get("x", "Art")
     domain_y = domain_cfg.get("y", "Office")
-    top_m = ref_cfg.get("top_m", 5)
+    top_m = ref_cfg.get("top_m", 5)       # 域检查窗口 (论文 Algorithm 1 的 m)
+    top_k = ref_cfg.get("top_k", 20)      # 输出列表长度 (论文 I = I₂ 为列表, HR@K 需 ≥K)
     use_bm25 = ref_cfg.get("use_bm25", True)
     fallback_enabled = ref_cfg.get("fallback_enabled", True)
 
@@ -302,19 +327,18 @@ def refine_predictions(
 
     results = load_json(pred_file)
     item_metadata = load_item_metadata()
-    id_mapping = load_id_mapping()
 
     # 构建 BM25 grounding
     grounder = BM25Grounding(item_metadata, use_bm25=use_bm25)
 
-    # 加载 DG 评分矩阵 (回退用)
-    dg_scores = None
+    # 加载 DG 候选矩阵 (真 I₁ 回退用, 行按 DG 评分降序)
+    dg_candidates = None
     if fallback_enabled:
         try:
-            dg_scores = load_dg_scores()
-            logger.info(f"DG 评分矩阵已加载: {dg_scores.shape}")
+            dg_candidates = load_dg_candidates()
+            logger.info(f"DG 候选矩阵已加载: {dg_candidates.shape}")
         except FileNotFoundError:
-            logger.warning("DG 评分矩阵不存在，域外回退将跳过")
+            logger.warning("DG 候选矩阵不存在, 域外回退将跳过")
             fallback_enabled = False
 
     # 逐条精炼
@@ -328,44 +352,53 @@ def refine_predictions(
 
         new_result = dict(result)  # 复制原始结果
 
-        # Step 1: BM25 grounding
-        grounded = grounder.ground(llm_output, top_m=top_m)
+        # Step 1: BM25 grounding (返回 top_k 候选, 供输出列表使用)
+        grounded = grounder.ground(llm_output, top_m=top_k)
 
         if grounded:
             best = grounded[0]
             stats["grounded"] += 1
 
-            # Step 2: 域检查
+            # Step 2: 域检查 (论文: 只看 top-m 窗口)
             in_domain = check_domain(
-                grounded, target_domain, item_metadata,
+                grounded[:top_m], target_domain, item_metadata,
                 domain_x, domain_y,
             )
 
             if in_domain:
-                # 域内: 使用 BM25 结果
+                # 域内: 输出 BM25 锚定列表 (论文 I = I₂)
                 new_result["prediction_original"] = llm_output
-                new_result["prediction"] = best["title"]
+                new_result["prediction"] = [g["title"] for g in grounded]
+                new_result["prediction_ids"] = [g["item_id"] for g in grounded]
+                new_result["grounded_items"] = [
+                    {"item_id": g["item_id"], "title": g["title"], "score": g["score"]}
+                    for g in grounded
+                ]
                 new_result["grounded_item_id"] = best["item_id"]
                 new_result["grounded_score"] = best["score"]
                 new_result["refined"] = True
                 stats["in_domain"] += 1
             elif fallback_enabled:
-                # 域外: DG 回退 (按 DG 特征行号定位, 缺省回退到列表下标)
+                # 域外: DG 候选矩阵回退 (真 I₁, top-K 列表)
                 dg_index = new_result.get("dg_index")
-                dg_result = dg_fallback(
+                dg_list = dg_candidate_fallback_list(
                     dg_index if dg_index is not None else idx,
-                    dg_scores, id_mapping, item_metadata,
+                    dg_candidates, item_metadata, top_k,
                 )
                 new_result["prediction_original"] = llm_output
-                new_result["prediction"] = dg_result["title"]
-                new_result["grounded_item_id"] = dg_result["item_id"]
+                new_result["prediction"] = [g["title"] for g in dg_list]
+                new_result["prediction_ids"] = [g["item_id"] for g in dg_list]
+                new_result["grounded_items"] = dg_list
+                new_result["grounded_item_id"] = (
+                    dg_list[0]["item_id"] if dg_list else ""
+                )
                 new_result["fallback_to_dg"] = True
                 new_result["refined"] = True
                 stats["fallback"] += 1
             else:
                 new_result["refined"] = False
         else:
-            # grounding 失败: 保持原始 LLM 输出
+            # grounding 失败: 保持原始 LLM 输出 (单条文本)
             new_result["refined"] = False
 
         refined_results.append(new_result)

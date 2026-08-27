@@ -51,7 +51,8 @@ class LLMRecommender:
     def load(self):
         """加载模型和 tokenizer"""
         try:
-            from transformers import AutoModelForCausalLM, AutoTokenizer
+            from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+            import torch
         except ImportError:
             raise ImportError("请安装 transformers: pip install transformers")
 
@@ -62,21 +63,29 @@ class LLMRecommender:
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
+        # 4bit 量化加载 (与训练端一致): 全量 fp16 7B ≈14GB, 4bit ≈4GB, 24GB 卡上否则推理必 OOM
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_use_double_quant=True,
+        )
         self._model = AutoModelForCausalLM.from_pretrained(
             self.base_model,
-            torch_dtype="auto",
+            quantization_config=bnb_config,
+            torch_dtype=torch.float16,
             device_map="auto",
             trust_remote_code=True,
         )
 
-        # 加载 LoRA adapter
+        # 加载 LoRA adapter。保留 PeftModel 不 merge_and_unload:
+        # merge 会把 4bit 基座去量化回 fp16 (~14GB), 24GB 卡必 OOM; 未 merge 直接 generate 同样生效。
         if self.lora_path and Path(self.lora_path).exists():
             try:
                 from peft import PeftModel
                 logger.info(f"加载 LoRA adapter: {self.lora_path}")
                 self._model = PeftModel.from_pretrained(self._model, self.lora_path)
-                self._model = self._model.merge_and_unload()
-                logger.info("LoRA adapter 已合并到基座模型")
+                logger.info("LoRA adapter 已加载 (4bit, 未 merge)")
             except ImportError:
                 raise ImportError("请安装 peft: pip install peft")
 
@@ -86,6 +95,14 @@ class LLMRecommender:
     def _ensure_loaded(self):
         if self._model is None:
             self.load()
+
+    @staticmethod
+    def _extract_title(generated: str) -> str:
+        """从生成文本提取推荐标题: 去 Output: 前缀, 取最后一个非空行 (COT 最后一行是标题)"""
+        lines = [ln.strip() for ln in generated.split("\n")]
+        lines = [re.sub(r'^Output:\s*', '', ln, flags=re.IGNORECASE).strip() for ln in lines]
+        lines = [ln for ln in lines if ln]
+        return lines[-1] if lines else ""
 
     def generate(
         self,
@@ -112,7 +129,7 @@ class LLMRecommender:
             instruction_text,
             return_tensors="pt",
             truncation=True,
-            max_length=1024,
+            max_length=2048,
         ).to(self._model.device)
 
         with torch.no_grad():
@@ -128,12 +145,7 @@ class LLMRecommender:
 
         new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
         generated = self._tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
-
-        # 提取推荐结果 (取第一行)
-        result = generated.split("\n")[0].strip()
-        # 去除可能的 "Output:" 前缀
-        result = re.sub(r'^Output:\s*', '', result, flags=re.IGNORECASE)
-        return result
+        return self._extract_title(generated)
 
     def generate_batch(
         self,
@@ -165,7 +177,7 @@ class LLMRecommender:
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=1024,
+                max_length=2048,
             ).to(self._model.device)
 
             with torch.no_grad():
@@ -182,9 +194,7 @@ class LLMRecommender:
                 # left/right padding 都适用: 用输入总长度 (含 pad) 切片, 跳过整个输入前缀
                 new_tokens = output[inputs["input_ids"].shape[1]:]
                 generated = self._tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
-                result = generated.split("\n")[0].strip()
-                result = re.sub(r'^Output:\s*', '', result, flags=re.IGNORECASE)
-                results.append(result)
+                results.append(self._extract_title(generated))
 
             if (i // batch_size + 1) % 10 == 0:
                 logger.info(f"推理进度: {min(i + batch_size, len(prompts))}/{len(prompts)}")

@@ -58,18 +58,16 @@ export function Dashboard() {
   const logs = trainingLogs[tab]
   const { metrics, dgBaseline, training, stats } = data
 
-  // AO 数据集 LLM 仅生成 top-1 预测, 所有 K 值指标退化为 HR@1。
-  // 用 expandedMetrics (DG候选 top-K) 展示有区分度的 top-K 排名能力。
-  const useExpanded = tab === 'AO' && data.expandedMetrics != null
-  const displayMetrics = useExpanded ? data.expandedMetrics! : metrics
-  const metricsLabel = useExpanded ? 'Top-K 候选扩展' : undefined
+  // 使用 refined_metrics (精炼后指标), K 值有真实区分度
+  const displayMetrics = metrics
+  const metricsLabel = undefined
 
   const trainData = useMemo(
     () =>
       logs.steps.map((s) => {
-        const item: { step: number; loss: number; eval_loss?: number } = {
+        const item: { step: number; loss: number | null; eval_loss?: number | null } = {
           step: s.step,
-          loss: s.loss,
+          loss: s.loss ?? null,
         }
         if (s.eval_loss != null) item.eval_loss = s.eval_loss
         return item
@@ -150,20 +148,11 @@ export function Dashboard() {
               }}
             />
             <Legend verticalAlign="top" align="right" wrapperStyle={{ fontSize: '12px', paddingBottom: '8px' }} />
-            <Line type="monotone" dataKey="loss" name="训练损失" stroke="#2563eb" strokeWidth={2} dot={false} />
-            <Line
-              type="monotone"
-              dataKey="eval_loss"
-              name="验证损失"
-              stroke="#f59e0b"
-              strokeWidth={2}
-              dot={{ r: 3 }}
-              connectNulls
-            />
+            <Line type="monotone" dataKey="loss" name="训练损失" stroke="#2563eb" strokeWidth={2} dot={false} connectNulls />
           </LineChart>
         </ResponsiveContainer>
         <p className="mt-3 text-xs text-gray-400">
-          横轴为训练步数，纵轴为损失值。蓝色为训练损失，琥珀色为验证损失，整体呈收敛趋势。
+          横轴为训练步数，纵轴为损失值。蓝色为训练损失，整体呈收敛趋势。
         </p>
       </div>
 

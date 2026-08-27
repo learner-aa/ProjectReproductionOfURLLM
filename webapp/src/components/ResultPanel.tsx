@@ -77,7 +77,7 @@ export function ResultPanel({ result, loading, feedback, onFeedback }: Props) {
               <div key={su.id} className="rounded-xl border border-gray-100 bg-gray-50/60 p-3">
                 <div className="flex items-center justify-between text-sm">
                   <span className="font-medium text-gray-700">{su.id}</span>
-                  <span className="text-xs text-gray-400">相似度 {su.similarity.toFixed(2)}</span>
+                  <span className="text-xs text-gray-400">相似度 {su.similarity.toFixed(3)}</span>
                 </div>
                 <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-gray-200">
                   <div

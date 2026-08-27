@@ -90,6 +90,12 @@ class UserRetriever:
         self.test_fea_x = dg_features["test_x_fea"]      # (num_test_rows, 656)
         self.test_fea_y = dg_features["test_y_fea"]
 
+        # 预归一化向量: 批量检索时避免每个 query 重复归一化大矩阵 (大幅加速)
+        self.train_user_x_norm = self._l2_normalize(self.train_user_x)
+        self.train_user_y_norm = self._l2_normalize(self.train_user_y)
+        self.test_fea_x_norm = self._l2_normalize(self.test_fea_x)
+        self.test_fea_y_norm = self._l2_normalize(self.test_fea_y)
+
         # 每行训练向量对应的 user_id (按 train.json 顺序与特征行对齐)
         self.train_user_ids: List[str] = []
         for sample in train_data.values():
@@ -127,8 +133,15 @@ class UserRetriever:
             )
         self.train_user_x = real_x.astype(np.float32)
         self.train_user_y = real_y.astype(np.float32)
+        self.train_user_x_norm = self._l2_normalize(self.train_user_x)
+        self.train_user_y_norm = self._l2_normalize(self.train_user_y)
         self._using_real_vectors = True
         logger.info(f"已覆盖训练用户向量: shape={real_x.shape}")
+
+    @staticmethod
+    def _l2_normalize(mat: np.ndarray) -> np.ndarray:
+        """行级 L2 归一化"""
+        return mat / (np.linalg.norm(mat, axis=1, keepdims=True) + 1e-8)
 
     def _get_library_vectors(self, target_domain: str) -> np.ndarray:
         """获取检索库向量 (训练用户向量), 按目标域选视图"""
@@ -161,10 +174,12 @@ class UserRetriever:
                 f"dg_index {dg_index} 超出特征行数 {query_fea.shape[0]}"
             )
         query = query_fea[dg_index]
-        library = self._get_library_vectors(target_domain)
 
-        # 余弦相似度
-        sims = cosine_similarity(query, library).flatten()
+        # 余弦相似度: query 单向量归一化, library 用预归一化缓存 (避免每 query 重复归一化大矩阵)
+        q_norm = query / (np.linalg.norm(query) + 1e-8)
+        is_x = target_domain in (self.domain_x_name, "X")
+        library_norm = self.train_user_x_norm if is_x else self.train_user_y_norm
+        sims = (q_norm @ library_norm.T).flatten()
 
         # 排除指定用户 (自身)
         if exclude_user_ids:

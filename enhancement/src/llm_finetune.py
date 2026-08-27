@@ -37,7 +37,7 @@ DEFAULT_LORA_CONFIG = {
         "gradient_accumulation_steps": 8,
         "learning_rate": 1e-4,
         "warmup_ratio": 0.03,
-        "max_seq_length": 1024,
+        "max_seq_length": 2048,
         "weight_decay": 0.01,
         "fp16": True,
         "bf16": False,
@@ -84,25 +84,51 @@ def load_instruction_dataset(
                 tokenize=False,
                 add_generation_prompt=False,
             )
+            tokenized = tokenizer(
+                text,
+                truncation=True,
+                max_length=max_seq_length,
+                padding="max_length",
+                return_tensors=None,
+            )
+            tokenized["labels"] = tokenized["input_ids"].copy()
+            if "attention_mask" in tokenized:
+                for i in range(len(tokenized["labels"])):
+                    if tokenized["attention_mask"][i] == 0:
+                        tokenized["labels"][i] = -100
         else:
-            # Alpaca 格式
-            prompt = f"### Instruction:\n{item['instruction']}\n\n### Input:\n{item['input']}\n\n### Response:\n{item['output']}"
-            text = prompt + tokenizer.eos_token
+            # Alpaca 格式: 只对 "### Response:" 之后的输出段计算 loss,
+            # prompt 部分置 -100, 避免模型被训练成"续写 prompt"而非生成标题
+            prompt = f"### Instruction:\n{item['instruction']}\n\n### Input:\n{item['input']}\n\n### Response:\n"
+            full_text = prompt + item["output"] + tokenizer.eos_token
 
-        tokenized = tokenizer(
-            text,
-            truncation=True,
-            max_length=max_seq_length,
-            padding="max_length",
-            return_tensors=None,
-        )
-        tokenized["labels"] = tokenized["input_ids"].copy()
+            # 用 offset_mapping 在字符级定位输出段起始 token:
+            # 单独 tokenize(prompt) 与 tokenize(full_text) 对相同字符前缀的 BPE 切分可能不同
+            # (prompt 以 \n 结尾, 与 output 开头的 subword 合并), 直接数 token 会偏移。
+            tokenized = tokenizer(
+                full_text,
+                truncation=True,
+                max_length=max_seq_length,
+                padding="max_length",
+                return_tensors=None,
+                return_offsets_mapping=True,
+            )
+            offsets = tokenized.pop("offset_mapping")
 
-        # 对 padding token 设置 -100 (不计算 loss)
-        if "attention_mask" in tokenized:
-            for i in range(len(tokenized["labels"])):
-                if tokenized["attention_mask"][i] == 0:
-                    tokenized["labels"][i] = -100
+            out_start_char = len(prompt)  # output 在 full_text 中的字符起始偏移
+            out_token_start = next(
+                (i for i, (s, e) in enumerate(offsets) if e > out_start_char),
+                len(tokenized["input_ids"]),
+            )
+
+            labels = [-100] * len(tokenized["input_ids"])
+            labels[out_token_start:] = tokenized["input_ids"][out_token_start:]
+            # padding 位置不参与 loss
+            if "attention_mask" in tokenized:
+                for i in range(len(labels)):
+                    if tokenized["attention_mask"][i] == 0:
+                        labels[i] = -100
+            tokenized["labels"] = labels
 
         examples.append(tokenized)
 
@@ -253,6 +279,7 @@ def train(config: Optional[Dict] = None):
         output_dir=save_dir,
         num_train_epochs=training_config.get("num_epochs", 3),
         per_device_train_batch_size=training_config.get("batch_size", 4),
+        per_device_eval_batch_size=training_config.get("per_device_eval_batch_size", 2),
         gradient_accumulation_steps=training_config.get("gradient_accumulation_steps", 8),
         learning_rate=training_config.get("learning_rate", 1e-4),
         warmup_ratio=training_config.get("warmup_ratio", 0.03),
@@ -305,7 +332,16 @@ def train(config: Optional[Dict] = None):
     logger.info(f"  保存目录: {save_dir}")
     logger.info("=" * 60)
 
-    trainer.train()
+    # 续跑: 支持 training.resume_from_checkpoint (相对 lora_weights 的目录名或绝对路径)
+    resume_ckpt = training_config.get("resume_from_checkpoint")
+    if resume_ckpt:
+        rp = str(resume_ckpt)
+        if not Path(rp).is_absolute():
+            rp = str(get_output_dir() / "lora_weights" / rp)
+        logger.info(f"从 checkpoint 续训: {rp} (num_epochs={training_config.get('num_epochs')})")
+        trainer.train(resume_from_checkpoint=rp)
+    else:
+        trainer.train()
 
     # 保存最终模型
     final_path = str(get_output_dir() / "lora_weights" / "final")

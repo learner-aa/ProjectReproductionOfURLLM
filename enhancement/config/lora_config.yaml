@@ -15,11 +15,13 @@ model:
 # 训练参数
 training:
   num_epochs: 3
-  batch_size: 4                                  # per-device batch size
-  gradient_accumulation_steps: 8                 # effective batch = 4*8 = 32
+  batch_size: 2                                  # per-device batch size (24GB 下 4 会 OOM, 降为 2)
+  gradient_accumulation_steps: 16                # effective batch = 2*16 = 32 (保持不变)
+  gradient_checkpointing: true                   # 显式开启梯度检查点 (省激活显存)
+  per_device_eval_batch_size: 2                  # 显式限制 eval batch (默认 8 会在 step200 评估时爆显存)
   learning_rate: 1.0e-4
   warmup_ratio: 0.03
-  max_seq_length: 1024                           # 最大序列长度
+  max_seq_length: 2048                           # 最大序列长度 (含候选列表)
   weight_decay: 0.01
   fp16: true                                     # 使用 FP16 混合精度
   bf16: false                                    # A100 可设为 true
@@ -27,6 +29,7 @@ training:
   save_steps: 200
   eval_steps: 200
   save_total_limit: 3                            # 最多保留 3 个 checkpoint
+  resume_from_checkpoint: "checkpoint-500"
 
 # 数据路径
 data:
@@ -35,8 +38,8 @@ data:
 
 # 推理配置
 inference:
-  batch_size: 8                                  # 推理 batch size
-  temperature: 0.1                               # 低温度 → 更确定的生成
+  batch_size: 2                                  # 推理 batch size (4bit 模型 + 24GB 下 8 会 OOM, 降为 2)
+  temperature: 0.0                               # 贪心解码 → 输出格式稳定
   max_new_tokens: 128                            # 最大生成 token
 
 # 输出

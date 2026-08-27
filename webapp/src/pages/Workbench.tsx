@@ -33,7 +33,6 @@ export function Workbench({ dataset, currentUser, onSelectUser, onRandomUser, da
     setLoading(true)
     setResult(null)
     setFeedback(null)
-    // 使用预计算的推理结果进行演示
     window.setTimeout(() => {
       setResult(currentUser.result)
       setLoading(false)

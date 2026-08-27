@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 DEFAULT_CONFIG = {
-    "min_interactions": 3,       # 最少交互次数过滤 (用户级别)
+    "min_interactions": 1,       # 最少交互次数过滤 (用户级别, 1=保留冷用户供冷/热启动分析)
     "max_seq_len": 15,           # 最大序列长度 (与 DG 模型一致)
     "random_seed": 2040,         # 随机种子
     "train_file": "train_F2.txt",   # AO 默认; GM 用 train_F.txt
@@ -238,7 +238,8 @@ def parse_split(
 
 def load_precomputed_attributes() -> Dict[str, Dict]:
     """
-    从 DG_src/dataset/item_prompt_{AO|GM}/*_exat_*.json 读取物品属性。
+    从 DG_src/dataset/*/item_prompt_{AO|GM}/*_exat_*.json 读取物品属性
+    (兼容 Entertainment-Education_{AO|Amazon} 实际布局)。
 
     每个 entry: {"qqid": int, "choices": [{"message": {"content": "[...]"}}]}
     qqid 即 DG 索引。
@@ -247,14 +248,19 @@ def load_precomputed_attributes() -> Dict[str, Dict]:
         {item_id_str: {"intro": str, "attributes": [str]}}
     """
     dir_name = f"item_prompt_{CURRENT_DATASET}"
+    # 兼容两种布局: 旧约定 DG_src/dataset/item_prompt_{DS} 和 {DS}/item_prompt_{DS},
+    # 以及实际存放位置 DG_src/dataset/Entertainment-Education_{AO|Amazon}/item_prompt_{DS}
     search_dirs = [
-        Path(CURRENT_DG_ROOT) / "DG_src" / "dataset" / dir_name,
-        get_dataset_dir() / dir_name,
+        str(Path(CURRENT_DG_ROOT) / "DG_src" / "dataset" / dir_name),
+        str(get_dataset_dir() / dir_name),
     ]
+    search_dirs += sorted(
+        glob.glob(str(Path(CURRENT_DG_ROOT) / "DG_src" / "dataset" / "*" / dir_name))
+    )
 
     files = []
     for d in search_dirs:
-        files = sorted(glob.glob(str(d / "*_exat_*.json")))
+        files = sorted(glob.glob(str(Path(d) / "*_exat_*.json")))
         if files:
             break
 

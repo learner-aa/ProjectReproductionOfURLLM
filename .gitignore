@@ -43,3 +43,16 @@ DG_Final/AO/item_prompt_AO/
 enhancement/logs_*.txt
 enhancement/outputs/**/logs_*.txt
 webapp/logs_*.txt
+
+# === 备份与临时文件 ===
+enhancement_backup_*/
+enhancement/outputs/**/_bak_*/
+enhancement/outputs/**/lora_weights_bak_*/
+enhancement/outputs/**/lora_weights_final_*/
+enhancement/src/_bak_*/
+enhancement/outputs/**/fullset_*.json
+enhancement/outputs/**/refined_predictions_backup_*.json
+enhancement/outputs/**/events.out.tfevents.*
+enhancement/data/processed/**/*.bak
+enhancement/data/processed/**/*.bak_*
+enhancement/*.npy

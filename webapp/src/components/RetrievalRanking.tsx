@@ -30,7 +30,7 @@ export function RetrievalRanking({ pool }: { pool: RetrievalCandidate[] }) {
                 {c.id}
                 {c.selected && <CheckCircle2 size={14} className="text-blue-500" />}
               </span>
-              <span className="text-xs text-gray-400">相似度 {c.similarity.toFixed(2)}</span>
+              <span className="text-xs text-gray-400">相似度 {c.similarity.toFixed(3)}</span>
             </div>
             <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-gray-200">
               <div

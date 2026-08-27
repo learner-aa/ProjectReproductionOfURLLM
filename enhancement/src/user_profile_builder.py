@@ -469,9 +469,9 @@ def run_profile_building(config: Dict):
     # 保存用户画像
     save_json(profiles, get_processed_dir() / "user_profiles.json")
 
-    # 为测试用户构建特征画像
-    if dg_features is not None:
-        # 训练用户向量每行对应的 user_id (与 DG 特征行对齐)
+    # 为测试用户构建特征画像 (可选): test_embedding_profiles.json 未被下游使用,
+    # 且构建很慢 (~17min), 默认跳过; 需要时置 profile.build_test_embedding=true
+    if dg_features is not None and config.get("profile", {}).get("build_test_embedding", False):
         train_path = get_processed_dir() / "train.json"
         train_data = load_json(train_path) if train_path.exists() else {}
         train_user_ids = [
@@ -484,6 +484,8 @@ def run_profile_building(config: Dict):
             item_metadata=item_metadata,
         )
         save_json(test_embedding_profiles, get_processed_dir() / "test_embedding_profiles.json")
+    else:
+        logger.info("跳过测试用户特征画像构建 (产物未被下游使用)")
 
     logger.info("=" * 60)
     logger.info("用户画像构建完成！")

@@ -59,7 +59,19 @@ def set_dataset(name: str, dg_root: Optional[str] = None):
     assert name in ("AO", "GM"), f"未知数据集: {name}, 仅支持 AO/GM"
     CURRENT_DATASET = name
     if dg_root:
-        CURRENT_DG_ROOT = str(dg_root)
+        candidate = str(dg_root)
+        if not Path(candidate).exists():
+            local_default = str(PROJECT_ROOT.parent / "DG_Final")
+            logger.warning(
+                f"dg_root 不存在: {candidate}, 回退到本地默认: {local_default}"
+            )
+            candidate = local_default
+        CURRENT_DG_ROOT = candidate
+    elif CURRENT_DG_ROOT is None:
+        local_default = str(PROJECT_ROOT.parent / "DG_Final")
+        if Path(local_default).exists():
+            logger.info(f"dg_root 未配置, 使用本地默认: {local_default}")
+            CURRENT_DG_ROOT = local_default
     # 切换 processed/outputs 目录到对应数据集子目录
     CURRENT_PROCESSED_DIR = PROCESSED_DIR / name
     CURRENT_OUTPUT_DIR = OUTPUT_DIR / name
@@ -181,6 +193,7 @@ def load_dg_candidates() -> np.ndarray:
     """加载 DG 模型候选物品矩阵 (num_test_users, 10000)"""
     candidates = None
     for pattern in [
+        get_dataset_dir() / "DG" / "*DGresult*test_candidate*.npy",
         Path(CURRENT_DG_ROOT) / "*DGresult*test_candidate*.npy",
         get_dataset_dir() / "*candidate*.npy",
     ]:

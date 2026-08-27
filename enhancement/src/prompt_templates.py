@@ -54,20 +54,20 @@ Respond in JSON format:
 # Prompt II: 用户画像增强推荐
 # ============================================================
 
-PROMPT_II_RECOMMEND_BASE = """Instruction: Based on the user's interaction history and profile information, recommend a new {target_domain} item that the user would likely enjoy.
+PROMPT_II_RECOMMEND_BASE = """You are a cross-domain recommendation assistant. Based on the user's interaction history and profile, recommend a new {target_domain} item the user would likely enjoy.
 
-Input:
+=== User Profile ===
 {user_profile_text}
 
-User Interaction History (chronological, newest last):
+=== Interaction History ===
 {interaction_sequence}
 
-Please recommend ONE new {target_domain} item.
-Output:"""
+Recommend ONE specific {target_domain} item. Respond with ONLY the exact title of the item — a single line. No explanations, no lists, no IDs, no attributes, no extra words.
+Example:
+[exact item title]"""
 
-PROMPT_II_RECOMMEND_WITH_PROFILE = """Instruction: You are a recommendation assistant. Based on the user's profile, preferences, and interaction history, recommend a new {target_domain} item.
+PROMPT_II_RECOMMEND_WITH_PROFILE = """You are a recommendation assistant. Based on the user's profile, preferences, and interaction history, recommend a new {target_domain} item.
 
-Input:
 === User Profile ===
 {user_profile_text}
 
@@ -79,12 +79,12 @@ Input:
 - Preferred categories: {preferred_categories}
 - Similar items the user may like: {similar_items}
 
-Please recommend ONE specific {target_domain} item title that matches the user's preferences.
-Output:"""
+Recommend ONE specific {target_domain} item. Respond with ONLY the exact title of the item — a single line. No explanations, no lists, no IDs, no attributes, no extra words.
+Example:
+[exact item title]"""
 
-PROMPT_II_RECOMMEND_COT = """Instruction: You are a cross-domain recommendation assistant. Analyze the user's interaction history and preferences step by step, then recommend a new {target_domain} item.
+PROMPT_II_RECOMMEND_COT = """You are a cross-domain recommendation assistant. Analyze the user's interaction history and preferences step by step, then recommend a new {target_domain} item.
 
-Input:
 === User Profile ===
 {user_profile_text}
 
@@ -94,14 +94,14 @@ Input:
 Think step by step:
 1. What are the user's main interests based on their history?
 2. What attributes and categories does the user prefer?
-3. Based on these preferences, what {target_domain} item would be a good recommendation?
+3. Based on these preferences, which {target_domain} item fits best?
 
-Please output ONLY the recommended item title after "Output:".
-Output:"""
+After your reasoning, the LAST line of your response must be ONLY the exact title of the recommended item. No explanations, no lists, no IDs, no attributes on the last line.
+Example:
+[exact item title]"""
 
-PROMPT_II_RECOMMEND_WITH_RETRIEVAL = """Instruction: Given a list of items the user has interacted with, along with some similar users who have similar interaction histories, please recommend a new {target_domain} item that the user would likely enjoy.
+PROMPT_II_RECOMMEND_WITH_RETRIEVAL = """You are a cross-domain recommendation assistant. Given a list of items the user has interacted with, along with some similar users who have similar interaction histories, recommend a new {target_domain} item the user would likely enjoy.
 
-Input:
 === Similar Users ===
 {retrieved_users_text}
 
@@ -111,8 +111,24 @@ Input:
 === Target User Profile ===
 {user_profile_text}
 
-Please recommend ONE specific {target_domain} item title.
-Output:"""
+Recommend ONE specific {target_domain} item. Respond with ONLY the exact title of the item — a single line. No explanations, no lists, no IDs, no attributes, no extra words.
+Example:
+[exact item title]"""
+
+PROMPT_II_RECOMMEND_WITH_CANDIDATES = """You are a cross-domain recommendation assistant. Based on the user's interaction history and profile, choose the best {target_domain} item for the user from the candidate list below.
+
+=== User Profile ===
+{user_profile_text}
+
+=== Interaction History ===
+{interaction_sequence}
+
+=== Candidate Items ===
+{candidates_text}
+
+Choose the single best {target_domain} item from the candidates above. Respond with ONLY the exact title of that candidate — a single line. No explanations, no lists, no IDs, no attributes, no extra words.
+Example:
+[exact item title]"""
 
 
 # ============================================================
@@ -203,6 +219,7 @@ def get_prompt_template(template_name: str) -> str:
         "recommend_profile": PROMPT_II_RECOMMEND_WITH_PROFILE,
         "recommend_cot": PROMPT_II_RECOMMEND_COT,
         "recommend_retrieval": PROMPT_II_RECOMMEND_WITH_RETRIEVAL,
+        "recommend_candidates": PROMPT_II_RECOMMEND_WITH_CANDIDATES,
         "profile_compact": PROFILE_TEMPLATE_COMPACT,
         "profile_detailed": PROFILE_TEMPLATE_DETAILED,
     }

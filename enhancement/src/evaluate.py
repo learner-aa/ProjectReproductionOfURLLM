@@ -23,7 +23,7 @@ import numpy as np
 from data_utils import (
     get_output_dir, get_processed_dir,
     load_json, save_json,
-    load_dg_scores, load_dg_candidates, load_dg_config,
+    load_dg_candidates,
 )
 
 logger = logging.getLogger(__name__)
@@ -158,12 +158,24 @@ def compute_fuzzy_metrics(
     Returns:
         指标字典
     """
+    def best_score(p, t):
+        if isinstance(p, list):
+            if not p:
+                return 0.0
+            return max(fuzzy_match_score(x, t) for x in p)
+        return fuzzy_match_score(p, t)
+
+    def exact_hit(p, t):
+        if isinstance(p, list):
+            return any(x.lower().strip() == t.lower().strip() for x in p)
+        return p.lower().strip() == t.lower().strip()
+
     fuzzy_hits = sum(
         1 for p, t in zip(predictions, targets)
-        if fuzzy_match_score(p, t) >= threshold
+        if best_score(p, t) >= threshold
     )
     partial_hits = sum(
-        fuzzy_match_score(p, t) for p, t in zip(predictions, targets)
+        best_score(p, t) for p, t in zip(predictions, targets)
     )
 
     n = len(targets)
@@ -171,7 +183,7 @@ def compute_fuzzy_metrics(
         "fuzzy_HR@1": fuzzy_hits / n if n else 0.0,
         "partial_HR@1": partial_hits / n if n else 0.0,
         "exact_HR@1": sum(1 for p, t in zip(predictions, targets)
-                         if p.lower().strip() == t.lower().strip()) / n if n else 0.0,
+                         if exact_hit(p, t)) / n if n else 0.0,
     }
 
 
@@ -248,9 +260,9 @@ def evaluate_dg_baseline(
         指标字典
     """
     try:
-        scores = load_dg_scores()
+        candidates = load_dg_candidates()
     except FileNotFoundError:
-        logger.warning("DG 评分矩阵不存在，跳过基线评估")
+        logger.warning("DG 候选矩阵不存在，跳过基线评估")
         return {}
 
     item_to_idx = id_mapping.get("item_id_to_index", {})
@@ -264,9 +276,9 @@ def evaluate_dg_baseline(
     valid_count = 0
 
     for ui, user_id in enumerate(user_ids):
-        # 评分矩阵行号 = DG 特征行号 (dg_index); 缺省用列表下标
+        # 候选矩阵行号 = DG 特征行号 (dg_index); 缺省用列表下标
         score_idx = test_data[user_id].get("dg_index", ui)
-        if score_idx >= scores.shape[0]:
+        if score_idx >= candidates.shape[0]:
             continue
         target = test_data[user_id].get("target", {})
         target_id = str(target.get("item_id", ""))
@@ -275,18 +287,16 @@ def evaluate_dg_baseline(
         if target_idx is None:
             continue
 
-        user_scores = scores[score_idx]
-        sorted_items = np.argsort(user_scores)[::-1]
+        row = candidates[score_idx]
+        pos = np.where(row == target_idx)[0]
+        rank = int(pos[0]) + 1 if len(pos) else candidates.shape[1] + 1
 
         valid_count += 1
-        target_rank = np.where(sorted_items == target_idx)[0]
-        if len(target_rank) > 0:
-            rank = target_rank[0] + 1
-            metrics["MRR"] += 1.0 / rank
-            for k in k_values:
-                if rank <= k:
-                    metrics[f"HR@{k}"] += 1.0
-                    metrics[f"NDCG@{k}"] += 1.0 / np.log2(rank + 1)
+        metrics["MRR"] += 1.0 / rank
+        for k in k_values:
+            if rank <= k:
+                metrics[f"HR@{k}"] += 1.0
+                metrics[f"NDCG@{k}"] += 1.0 / np.log2(rank + 1)
 
     if valid_count > 0:
         for key in metrics:
@@ -327,12 +337,18 @@ def compute_out_of_domain_rate(
     total = len(predictions)
 
     for pred, target_domain in zip(predictions, target_domains):
-        pred_lower = pred.lower().strip()
-        matched_domain = title_to_domain.get(pred_lower)
+        preds = pred if isinstance(pred, list) else [pred]
+        ood = None  # None=未匹配到真实物品, True=域外, False=域内
+        for p in preds:
+            matched_domain = title_to_domain.get(p.lower().strip())
+            if matched_domain is None:
+                continue
+            ood = matched_domain != target_domain
+            break
 
-        if matched_domain and matched_domain != target_domain:
+        if ood is True:
             ood_count += 1
-        elif matched_domain is None:
+        elif ood is None:
             # 无法匹配到真实物品，视为潜在域外
             ood_count += 0.5  # 半计入
 
