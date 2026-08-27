@@ -425,6 +425,10 @@ test_F.txt    # GM 测试集  / test_F2.txt = AO
 - Cold/Warm 分析 — 冷/热用户分组指标
 - OOD 分析 — 域外推荐率
 
+`evaluation.json` 含两套指标：
+- `exact_metrics` — **LLM 原始**(未精炼)：LLM 每个样本只生成 1 条预测，故 HR@1=HR@5=HR@10=HR@20=NDCG@K=MRR，这是单条预测的数学必然结果，非 bug。
+- `refined_metrics` — **Answer Refinement 后**：经 BM25 grounding 扩展为 top-K 候选列表，HR@K 随 K 递增有真实区分度。前端与下文关键指标均取此套。
+
 ***
 
 ## 八、目录结构
@@ -553,7 +557,7 @@ URLLM-project/
 | HR@20  | 0.0460                | 0.0275 | +67%     |
 | MRR    | 0.0201                | 0.0165 | +22%     |
 
-> 指标来自 `refined_metrics`(Answer Refinement 后的评估结果)。GM 数据集 DG 基线较低是因为 DG 矩阵索引空间(0-112171)与 pipeline 的 id_mapping 空间(0-164879)部分不匹配导致跨空间查找命中率低。AO 数据集因物品池更大(38,396 候选)且物品标题含品牌/型号/尺寸，跨域推荐难度更高。
+> 指标来自 `refined_metrics`(Answer Refinement 后的评估结果)。LLM 原始(`exact_metrics`)每个样本仅 1 条预测，HR@1/5/10/20/NDCG@K/MRR 必然全等(单条预测的数学必然，非 bug)，故采用精炼后的多候选列表指标以体现 K 值区分度。GM 数据集 DG 基线较低是因为 DG 矩阵索引空间(0-112171)与 pipeline 的 id_mapping 空间(0-164879)部分不匹配导致跨空间查找命中率低。AO 数据集因物品池更大(38,396 候选)且物品标题含品牌/型号/尺寸，跨域推荐难度更高。
 
 ***
 

@@ -461,6 +461,8 @@ def run_evaluation(config: Optional[Dict] = None):
         test_data = load_json(test_path)
 
     # 1. 精确匹配评估
+    # 原始 LLM 每个样本只生成 1 条预测 (单字符串),
+    # 故 HR@1=HR@5=HR@10=HR@20=NDCG@K=MRR, 这是单条预测的数学必然, 非 bug。
     predictions = [r["prediction"] for r in results]
     targets = [r["ground_truth"] for r in results]
     exact_metrics = compute_all_metrics(predictions, targets)
@@ -508,7 +510,10 @@ def run_evaluation(config: Optional[Dict] = None):
     refined_file = get_output_dir() / "refined_predictions" / "refined_predictions.json"
     if refined_file.exists():
         refined_results = load_json(refined_file)
-        refined_preds = [r["prediction"] for r in refined_results]
+        # 精炼输出带 top-K 列表时按列表评估 (HR@5/10/20 读前 K 项), 否则退化为单项
+        refined_preds = [
+            r.get("top_k_candidates", r.get("prediction")) for r in refined_results
+        ]
         refined_targets = [r["ground_truth"] for r in refined_results]
         refined_metrics = compute_all_metrics(refined_preds, refined_targets)
         refined_fuzzy = compute_fuzzy_metrics(refined_preds, refined_targets)
